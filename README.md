@@ -1,3 +1,4 @@
+<img width="1117" height="855" alt="image" src="https://github.com/user-attachments/assets/4fd43ad0-4767-4512-89ba-64801cf16412" />
 # Sandboxie Minus
 ## Run AppContainer apps with no MSIX packages, VMs or heavy virtualisation required.
 
