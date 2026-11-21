@@ -253,6 +253,15 @@ function Btn($text, $x, $y, $w, $parent, [scriptblock]$click, $anchor = 'Top,Lef
 function Safe([scriptblock]$sb) {
     try { & $sb } catch { Log "ERROR: $($_.Exception.Message)"; [void][Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Error', 'OK', 'Error') }
 }
+function Fit-WindowToScreen($form, [int]$minW = 480, [int]$minH = 360) {
+    $wa = ([Windows.Forms.Screen]::FromControl($(if ($F -and -not $F.IsDisposed) { $F } else { $form }))).WorkingArea
+    $maxW = [Math]::Max(320, $wa.Width - 20); $maxH = [Math]::Max(240, $wa.Height - 20)
+    $form.MinimumSize = (Sz ([Math]::Min($minW, $maxW)) ([Math]::Min($minH, $maxH)))
+    $form.MaximumSize = (Sz $wa.Width $wa.Height)
+    if ($form.Width -gt $maxW -or $form.Height -gt $maxH) {
+        $form.Size = (Sz ([Math]::Min($form.Width, $maxW)) ([Math]::Min($form.Height, $maxH)))
+    }
+}
 
 # ===Main Window n Shell
 $F = Ctl Form @{ Text = 'Sandboxie Minus'; ClientSize = (Sz 1120 830); StartPosition = 'CenterScreen'; MinimumSize = (Sz 1040 620); Font = $script:FontBody } $null
@@ -272,15 +281,15 @@ $script:LogBox = Ctl TextBox @{ Location = (Pt 10 666); Size = (Sz 1100 154); Mu
 
 $tabContainers = Ctl TabPage @{ Text = 'Containers' } $script:Tabs
 $tabGen = Ctl TabPage @{ Text = 'General'; AutoScroll = $true } $script:Tabs
-$tabRules = Ctl TabPage @{ Text = 'Folders && files' } $script:Tabs
-$tabReg = Ctl TabPage @{ Text = 'Registry' } $script:Tabs
+$tabRules = Ctl TabPage @{ Text = 'Folders && files'; AutoScroll = $true; AutoScrollMinSize = (Sz 805 380) } $script:Tabs
+$tabReg = Ctl TabPage @{ Text = 'Registry'; AutoScroll = $true; AutoScrollMinSize = (Sz 805 380) } $script:Tabs
 $tabNet = Ctl TabPage @{ Text = 'Network && capabilities'; AutoScroll = $true } $script:Tabs
 $tabHard = Ctl TabPage @{ Text = 'Hardening' } $script:Tabs
 $tabEnv = Ctl TabPage @{ Text = 'Env && quotas'; AutoScroll = $true } $script:Tabs
-$tabPreset = Ctl TabPage @{ Text = 'Preset (*n)' } $script:Tabs
-# Ensure non-zero initial size while tab is unselected so Bottom-anchored children compute valid bounds
-if ($tabPreset.Width -lt 200 -or $tabPreset.Height -lt 200) { $tabPreset.Size = (Sz 1100 536) }
-$tabNotes = Ctl TabPage @{ Text = 'Notes' } $script:Tabs
+$tabPreset = Ctl TabPage @{ Text = 'Preset (*n)'; AutoScroll = $true; AutoScrollMinSize = (Sz 805 340) } $script:Tabs
+$tabNotes = Ctl TabPage @{ Text = 'Notes'; Padding = (New-Object Windows.Forms.Padding(10)) } $script:Tabs
+# Ensure design-time size while tabs are unselected so anchored children/grids compute valid bounds
+foreach ($tp in @($tabRules, $tabReg, $tabHard, $tabPreset, $tabNotes)) { $tp.Size = (Sz 805 500) }
 foreach ($pt in @($tabGen, $tabRules, $tabReg, $tabNet, $tabHard, $tabEnv, $tabPreset)) { [void]$script:ProfileOnlyTabs.Add($pt) }
 
 $script:CardsFlow = Ctl FlowLayoutPanel @{ Dock = 'Fill'; AutoScroll = $true; WrapContents = $true; Padding = (New-Object Windows.Forms.Padding(8)) } $tabContainers
@@ -598,17 +607,17 @@ function Update-UsbHidLabel {
 }
 # ===USB / HID Device Picker Dialog
 function Show-UsbHidPickerDialog {
-    $dlg = Ctl Form @{ Text = 'USB & HID Device Access'; ClientSize = (Sz 780 510); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false } $null
-    $rbOff = Ctl RadioButton @{ Text = 'Off (deny all USB & HID devices)'; Location = (Pt 14 12); Size = (Sz 740 22) } $dlg
-    $rbAll = Ctl RadioButton @{ Text = 'Allow all USB & HID devices (token capabilities: usb + humanInterfaceDevice + interface class SIDs)'; Location = (Pt 14 36); Size = (Sz 740 22) } $dlg
-    $rbSpec = Ctl RadioButton @{ Text = 'Allow only selected USB / HID device(s) (grants container SID ACL on Apply (admin))'; Location = (Pt 14 60); Size = (Sz 740 22) } $dlg
+    $dlg = Ctl Form @{ Text = 'USB & HID Device Access'; ClientSize = (Sz 780 510); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; AutoScroll = $true; AutoScrollMinSize = (Sz 480 320) } $null
+    $rbOff = Ctl RadioButton @{ Text = 'Off (deny all USB & HID devices)'; Location = (Pt 14 12); Size = (Sz 740 22); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg
+    $rbAll = Ctl RadioButton @{ Text = 'Allow all USB & HID devices (token capabilities: usb + humanInterfaceDevice + interface class SIDs)'; Location = (Pt 14 36); Size = (Sz 740 22); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg
+    $rbSpec = Ctl RadioButton @{ Text = 'Allow only selected USB / HID device(s) (grants container SID ACL on Apply (admin))'; Location = (Pt 14 60); Size = (Sz 740 22); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg
     switch ($script:CurUsbHidMode) {
         'All'      { $rbAll.Checked = $true }
         'Specific' { $rbSpec.Checked = $true }
         default    { $rbOff.Checked = $true }
     }
     # Keep DataGridView ReadOnly and toggle Allow manually on click / space to avoid WinForms CheckBoxCell commit lag
-    $dg = Ctl DataGridView @{ Location = (Pt 14 90); Size = (Sz 752 368); AllowUserToAddRows = $false; RowHeadersVisible = $false; SelectionMode = 'FullRowSelect'; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; ReadOnly = $true } $dlg
+    $dg = Ctl DataGridView @{ Location = (Pt 14 90); Size = (Sz 752 368); Anchor = [Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'; AllowUserToAddRows = $false; RowHeadersVisible = $false; SelectionMode = 'FullRowSelect'; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; ReadOnly = $true } $dlg
     $dc0 = New-Object Windows.Forms.DataGridViewCheckBoxColumn; $dc0.Name = 'Allow'; $dc0.HeaderText = 'Allow'; $dc0.FillWeight = 8; [void]$dg.Columns.Add($dc0)
     $dg.add_CellClick({
         param($s, $e)
@@ -659,7 +668,7 @@ function Show-UsbHidPickerDialog {
     [void](Btn 'Refresh Devices' 14 468 125 $dlg {
         $curChecked = @($dg.Rows | Where-Object { [bool]$_.Cells['Allow'].Value } | ForEach-Object { [string]$_.Cells['Path'].Value })
         & $loadDevices $curChecked
-    })
+    } 'Bottom,Left')
     [void](Btn 'OK' 558 468 100 $dlg { Safe {
         if ($rbAll.Checked) {
             $script:CurUsbHidMode = 'All'; $script:CurUsbHidDevices = @()
@@ -672,15 +681,15 @@ function Show-UsbHidPickerDialog {
         }
         Update-UsbHidLabel; Save-UiToProfile
         $dlg.DialogResult = 'OK'; $dlg.Close()
-    } })
-    [void](Btn 'Cancel' 666 468 100 $dlg { $dlg.DialogResult = 'Cancel'; $dlg.Close() })
-    Set-DarkTheme $dlg
+    } } 'Bottom,Right')
+    [void](Btn 'Cancel' 666 468 100 $dlg { $dlg.DialogResult = 'Cancel'; $dlg.Close() } 'Bottom,Right')
+    Set-DarkTheme $dlg; Fit-WindowToScreen $dlg 520 340
     [void]$dlg.ShowDialog($F)
 }
 
 # ===Hardening tab
 # Explicit AutoScroll container because $tabHard itself doesnt scroll
-$pnlH = Ctl Panel @{ Location = (Pt 0 0); Size = (Sz 800 500); AutoScroll = $true; Anchor = [Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right' } $tabHard
+$pnlH = Ctl Panel @{ Dock = 'Fill'; AutoScroll = $true } $tabHard
 $hardItems = @(
     @('Hard.Lpac', 'LPAC (Less-Privileged AppContainer, recommended; Win10 1703+): drops ALL APPLICATION PACKAGES (S-1-15-2-1).'),
     @('Hard.NoChild', 'Block creating child processes (leave OFF for multi-process apps like Blender add-ons/FFmpeg/browsers)'),
@@ -765,5 +774,4 @@ REQUIREMENTS & THREAT MODEL NOTES
 - Launcher & KillOnClose: WaitTree uses an I/O Completion Port so launcher stubs that fork a child and exit don't prematurely kill the child tree. From the GUI, each Launch spawns a background PowerShell host; use "Inspect" -> "Terminate running" to kill an active container.
 - Review: icacls <folder> shows container SID entries. Use Revoke (admin) to remove ACLs, firewall rules, and loopback exemptions.
 '@
-[void](Ctl TextBox @{ Text = $notes; Multiline = $true; ReadOnly = $true; ScrollBars = 'Vertical'; Location = (Pt 10 10); Size = (Sz 785 490)
-    Anchor = [Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right' } $tabNotes)
+[void](Ctl TextBox @{ Text = $notes; Multiline = $true; ReadOnly = $true; ScrollBars = 'Vertical'; Dock = 'Fill' } $tabNotes)

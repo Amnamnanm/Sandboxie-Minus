@@ -232,6 +232,35 @@ function Save-PresetVarsFromGrid {
 # Export n Import
 # Descriptions for *n tokens are cached in memory per profile name ($script:PresetDescCache)
 # so they survive tab changes without ever being written to profiles.json.
+function Sync-MainLayout {
+    if ($F.WindowState -eq 'Minimized' -or $F.ClientSize.Width -lt 200 -or $F.ClientSize.Height -lt 200) { return }
+    $cw = $F.ClientSize.Width
+    $navH = [Math]::Max(38, $script:NavBar.GetPreferredSize((Sz ([Math]::Max(200, $cw - 20)) 0)).Height)
+    $script:NavBar.Height = $navH
+    $topY = 10 + $navH + 4
+    if ($script:PresetBar.Visible) { $script:PresetBar.Top = $topY; $topY += 36 }
+    $bottomEdge = $script:ProgLbl.Top - 8
+    if ($script:BtnImportPreset) {
+        $rows = New-Object System.Collections.Generic.List[object]
+        $curRow = New-Object System.Collections.Generic.List[object]; $x = 10
+        foreach ($b in $script:ProfBtns) { [void]$curRow.Add(@($b, $x)); $x += $b.Width + 4 }
+        $x += 12
+        foreach ($b in $script:ActBtns) {
+            if ($x + $b.Width -gt $cw - 10 -and $curRow.Count -gt 0) { [void]$rows.Add($curRow); $curRow = New-Object System.Collections.Generic.List[object]; $x = 10 }
+            [void]$curRow.Add(@($b, $x)); $x += $b.Width + 4
+        }
+        if ($x + $script:BtnImportPreset.Width -gt $cw - 10 -and $curRow.Count -gt 0) { [void]$rows.Add($curRow); $curRow = New-Object System.Collections.Generic.List[object]; $x = 10 }
+        $impX = if ($rows.Count -eq 0) { $cw - $script:BtnImportPreset.Width - 10 } else { $x }
+        [void]$curRow.Add(@($script:BtnImportPreset, $impX)); [void]$rows.Add($curRow)
+        $firstY = $script:ProgLbl.Top - ($rows.Count * 32)
+        for ($ri = 0; $ri -lt $rows.Count; $ri++) {
+            $ry = $firstY + ($ri * 32)
+            foreach ($pair in $rows[$ri]) { $pair[0].Location = (Pt $pair[1] $ry) }
+        }
+        $bottomEdge = $firstY - 8
+    }
+    $script:TabHost.SetBounds(10, $topY, $cw - 20, [Math]::Max(180, $bottomEdge - $topY))
+}
 function Sync-PresetTab {
     Save-PresetVarsFromGrid
     $tokens = @()
@@ -239,11 +268,8 @@ function Sync-PresetTab {
         $paths = @($script:T.Exe.Text.Trim().Trim('"'), $script:T.Work.Text.Trim().Trim('"')) + @($script:Grid.Rows | ForEach-Object { [string]$_.Cells['Path'].Value })
         $tokens = @(Get-DynamicTokensFromPaths $paths)
     }
-    $bottomEdge = if ($script:BtnImportPreset) { $script:BtnImportPreset.Top - 8 } else { $F.ClientSize.Height - 242 }
     if ($tokens.Count -gt 0) {
-        # Shift TabHost down from Y=52 to Y=86 to reveal the 32px PresetBar above the tabs.
         $script:PresetBar.Visible = $true
-        $script:TabHost.SetBounds(10, 86, $F.ClientSize.Width - 20, [Math]::Max(200, $bottomEdge - 86))
         $key = Get-CurrentPresetCacheKey
         $cache = if ($key -and $script:PresetDescCache.ContainsKey($key)) { $script:PresetDescCache[$key] } else { @{} }
         $script:PresetVarGrid.Rows.Clear()
@@ -254,9 +280,9 @@ function Sync-PresetTab {
     } else {
         if ($script:Tabs.SelectedTab -eq $tabPreset) { Switch-NavTab $tabRules }
         $script:PresetBar.Visible = $false
-        $script:TabHost.SetBounds(10, 52, $F.ClientSize.Width - 20, [Math]::Max(200, $bottomEdge - 52))
         $script:PresetVarGrid.Rows.Clear()
     }
+    Sync-MainLayout
 }
 # Debounce exe/work TextChanged
 # only rebuild PresetVarGrid when the set of *n tokens actually changes
@@ -343,7 +369,7 @@ function Show-PresetImportDialog($parsed) {
     $fixedRules = @($p.Rules | Where-Object { -not $_.Path.Contains('*') })
     $dynRules = @($p.Rules | Where-Object { $_.Path.Contains('*') })
 
-    $dlg = Ctl Form @{ Text = 'Install App Preset'; ClientSize = (Sz 760 620); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false } $null
+    $dlg = Ctl Form @{ Text = 'Install App Preset'; ClientSize = (Sz 760 620); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; AutoScroll = $true } $null
     [void](Ctl Label @{ Text = 'Profile name (user-readable):'; Location = (Pt 14 16); AutoSize = $true } $dlg)
     $suggested = $p.Name
     if (Find-Profile $suggested) {
@@ -355,16 +381,16 @@ function Show-PresetImportDialog($parsed) {
     [void](Ctl Label @{ Text = 'Unique Container ID auto-assigned on import.'; Location = (Pt 480 16); AutoSize = $true } $dlg)
 
     [void](Ctl Label @{ Text = 'Executable:'; Location = (Pt 14 48); AutoSize = $true } $dlg)
-    $tbExe = Ctl TextBox @{ Text = $p.ExePath; Location = (Pt 190 45); Size = (Sz 555 24); ReadOnly = $true } $dlg
+    $tbExe = Ctl TextBox @{ Text = $p.ExePath; Location = (Pt 190 45); Size = (Sz 555 24); ReadOnly = $true; Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg
     $netSummary = if (Test-ProfileHasNetCap $p) { 'Network capabilities enabled' } else { 'Offline (0 network caps)' }
     $devList = @(); if ($p.Dev.Mic) { $devList += 'Mic' }; if ($p.Dev.Webcam) { $devList += 'Webcam' }; if ($p.Dev.Location) { $devList += 'Location' }
     if ($p.Dev.UsbHidMode -eq 'All') { $devList += 'USB/HID=All' } elseif ($p.Dev.UsbHidMode -eq 'Specific') { $devList += "USB/HID=$(@($p.Dev.UsbHidDevices).Count)" }
     $devSummary = if ($devList.Count) { ' | Devices: ' + ($devList -join ', ') } else { '' }
     $argSummary = if ($p.Arguments) { " | Args: $($p.Arguments)" } else { '' }
-    [void](Ctl Label @{ Text = "Security: LPAC=$($p.Hard.Lpac), $netSummary$devSummary$argSummary"; Location = (Pt 14 76); Size = (Sz 730 20) } $dlg)
+    [void](Ctl Label @{ Text = "Security: LPAC=$($p.Hard.Lpac), $netSummary$devSummary$argSummary"; Location = (Pt 14 76); Size = (Sz 730 20); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg)
 
     [void](Ctl Label @{ Text = '1) Fixed paths and permissions:'; Location = (Pt 14 102); AutoSize = $true } $dlg)
-    $dgFixed = Ctl DataGridView @{ Location = (Pt 14 122); Size = (Sz 732 135); AllowUserToAddRows = $false; RowHeadersVisible = $false; ReadOnly = $true; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window } $dlg
+    $dgFixed = Ctl DataGridView @{ Location = (Pt 14 122); Size = (Sz 732 135); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right'; AllowUserToAddRows = $false; RowHeadersVisible = $false; ReadOnly = $true; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window } $dlg
     foreach ($col in @(@('Path', 58), @('Scope', 24), @('Access', 18))) {
         $c = New-Object Windows.Forms.DataGridViewTextBoxColumn; $c.Name = $col[0]; $c.HeaderText = $col[0]; $c.FillWeight = $col[1]; [void]$dgFixed.Columns.Add($c)
     }
@@ -377,7 +403,7 @@ function Show-PresetImportDialog($parsed) {
     }
 
     [void](Ctl Label @{ Text = '2) Dynamic variables (*n) - enter your values:'; Location = (Pt 14 265); AutoSize = $true } $dlg)
-    $dgVars = Ctl DataGridView @{ Location = (Pt 14 285); Size = (Sz 732 115); AllowUserToAddRows = $false; RowHeadersVisible = $false; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; EditMode = 'EditOnEnter' } $dlg
+    $dgVars = Ctl DataGridView @{ Location = (Pt 14 285); Size = (Sz 732 115); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right'; AllowUserToAddRows = $false; RowHeadersVisible = $false; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; EditMode = 'EditOnEnter' } $dlg
     $vc1 = New-Object Windows.Forms.DataGridViewTextBoxColumn; $vc1.Name = 'Token'; $vc1.HeaderText = 'Token'; $vc1.FillWeight = 12; $vc1.ReadOnly = $true
     $vc2 = New-Object Windows.Forms.DataGridViewTextBoxColumn; $vc2.Name = 'Description'; $vc2.HeaderText = 'Creator description'; $vc2.FillWeight = 44; $vc2.ReadOnly = $true
     $vc3 = New-Object Windows.Forms.DataGridViewTextBoxColumn; $vc3.Name = 'Value'; $vc3.HeaderText = 'Your value (folder/name)'; $vc3.FillWeight = 44; $vc3.ReadOnly = $false
@@ -385,7 +411,7 @@ function Show-PresetImportDialog($parsed) {
     foreach ($dv in $dynVars) { [void]$dgVars.Rows.Add($dv.Token, $dv.Description, '') }
 
     [void](Ctl Label @{ Text = 'Dynamic paths (*n) and resolved preview:'; Location = (Pt 14 408); AutoSize = $true } $dlg)
-    $dgDyn = Ctl DataGridView @{ Location = (Pt 14 428); Size = (Sz 732 135); AllowUserToAddRows = $false; RowHeadersVisible = $false; ReadOnly = $true; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window } $dlg
+    $dgDyn = Ctl DataGridView @{ Location = (Pt 14 428); Size = (Sz 732 135); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right'; AllowUserToAddRows = $false; RowHeadersVisible = $false; ReadOnly = $true; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window } $dlg
     foreach ($col in @(@('Template', 38), @('Preview', 38), @('Access', 24))) {
         $c = New-Object Windows.Forms.DataGridViewTextBoxColumn; $c.Name = $col[0]; $c.HeaderText = $col[0]; $c.FillWeight = $col[1]; [void]$dgDyn.Columns.Add($c)
     }
@@ -435,9 +461,9 @@ function Show-PresetImportDialog($parsed) {
         $script:ImportDialogResult = $p
         $dlg.DialogResult = 'OK'
         $dlg.Close()
-    } })
-    [void](Btn 'Cancel' 646 578 100 $dlg { $dlg.DialogResult = 'Cancel'; $dlg.Close() })
-    Set-DarkTheme $dlg
+    } } 'Top,Right')
+    [void](Btn 'Cancel' 646 578 100 $dlg { $dlg.DialogResult = 'Cancel'; $dlg.Close() } 'Top,Right')
+    Set-DarkTheme $dlg; Fit-WindowToScreen $dlg 520 360
     $script:ImportDialogResult = $null
     if ($dlg.ShowDialog($F) -eq 'OK') { return $script:ImportDialogResult }
     $null
@@ -655,9 +681,9 @@ function Update-DesktopFieldState {
 if ($script:Chk['Hard.IsolateDesktop']) { $script:Chk['Hard.IsolateDesktop'].add_CheckedChanged({ if (-not $script:Loading) { Update-DesktopFieldState } }) }
 if ($script:Chk['Hard.JoinFirstDesktop']) { $script:Chk['Hard.JoinFirstDesktop'].add_CheckedChanged({ if (-not $script:Loading) { Update-DesktopFieldState } }) }
 function Show-DesktopManagerDialog {
-    $dlg = Ctl Form @{ Text = 'Isolated Desktop Manager (WinSta0)'; ClientSize = (Sz 840 470); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false } $null
-    $chkAll = Ctl CheckBox @{ Text = 'Show all WinSta0 desktops (non-ACM desktops are read-only)'; Location = (Pt 14 12); Size = (Sz 520 22) } $dlg
-    $dg = Ctl DataGridView @{ Location = (Pt 14 40); Size = (Sz 812 340); AllowUserToAddRows = $false; RowHeadersVisible = $false; SelectionMode = 'FullRowSelect'; MultiSelect = $false; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; ReadOnly = $true } $dlg
+    $dlg = Ctl Form @{ Text = 'Isolated Desktop Manager (WinSta0)'; ClientSize = (Sz 840 470); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; AutoScroll = $true; AutoScrollMinSize = (Sz 580 300) } $null
+    $chkAll = Ctl CheckBox @{ Text = 'Show all WinSta0 desktops (non-ACM desktops are read-only)'; Location = (Pt 14 12); Size = (Sz 520 22); Anchor = [Windows.Forms.AnchorStyles]'Top,Left,Right' } $dlg
+    $dg = Ctl DataGridView @{ Location = (Pt 14 40); Size = (Sz 812 340); Anchor = [Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'; AllowUserToAddRows = $false; RowHeadersVisible = $false; SelectionMode = 'FullRowSelect'; MultiSelect = $false; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; ReadOnly = $true } $dlg
     foreach ($col in @(@('Desktop', 24), @('Profile', 20), @('Processes', 22), @('Security', 34))) {
         $c = New-Object Windows.Forms.DataGridViewTextBoxColumn; $c.Name = $col[0]; $c.HeaderText = $col[0]; $c.FillWeight = $col[1]; [void]$dg.Columns.Add($c)
     }
@@ -678,9 +704,9 @@ function Show-DesktopManagerDialog {
         }
     }
     $chkAll.add_CheckedChanged({ Safe $load })
-    [void](Ctl Label @{ Text = 'Watchdog timeout (sec, 0=off; RCtrl=back):'; Location = (Pt 14 394); AutoSize = $true } $dlg)
-    $numRet = Ctl NumericUpDown @{ Location = (Pt 275 391); Size = (Sz 60 24); Minimum = 0; Maximum = 120; Value = 10 } $dlg
-    [void](Btn 'Refresh' 14 430 82 $dlg { Safe $load })
+    [void](Ctl Label @{ Text = 'Watchdog timeout (sec, 0=off; RCtrl=back):'; Location = (Pt 14 394); AutoSize = $true; Anchor = [Windows.Forms.AnchorStyles]'Bottom,Left' } $dlg)
+    $numRet = Ctl NumericUpDown @{ Location = (Pt 275 391); Size = (Sz 60 24); Minimum = 0; Maximum = 120; Value = 10; Anchor = [Windows.Forms.AnchorStyles]'Bottom,Left' } $dlg
+    [void](Btn 'Refresh' 14 430 82 $dlg { Safe $load } 'Bottom,Left')
     [void](Btn 'Switch To' 102 430 96 $dlg { Safe {
         if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
         $m = $dg.SelectedRows[0].Tag; $sec = [int]$numRet.Value
@@ -692,12 +718,12 @@ function Show-DesktopManagerDialog {
             [ACM.Native]::SwitchToDesktopByName($m.Name)
             if ($sec -gt 0) { $t = New-Object Windows.Forms.Timer; $t.Interval = $sec * 1000; $t.add_Tick({ param($s,$e) $s.Stop(); $s.Dispose(); try { [ACM.Native]::SwitchToDesktopByName('Default') } catch {} }); $t.Start() }
         }
-    } })
+    } } 'Bottom,Left')
     [void](Btn 'Re-secure ACL' 204 430 116 $dlg { Safe {
         if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
         $m = $dg.SelectedRows[0].Tag; if (-not $m.IsAcm) { throw 'Only ACM desktops can be modified.' }
         [ACM.Native]::ReSecureDesktop($m.Name, $m.Cn); Log "Re-secured '$($m.Name)'."; & $load
-    } })
+    } } 'Bottom,Left')
     [void](Btn 'Terminate & Close' 326 430 132 $dlg { Safe {
         if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
         $m = $dg.SelectedRows[0].Tag; if (-not $m.IsAcm) { throw 'Only ACM desktops can be terminated.' }
@@ -725,8 +751,8 @@ function Show-DesktopManagerDialog {
         } finally { $dlg.Enabled = $true }
         Log "Terminated $k process(es) on '$($m.Name)'. Still exists: $([ACM.Native]::DesktopExists($m.Name))."; & $load
     } })
-    [void](Btn 'Close' 726 430 100 $dlg { $dlg.Close() })
-    Set-DarkTheme $dlg; Safe $load; [void]$dlg.ShowDialog($F)
+    [void](Btn 'Close' 726 430 100 $dlg { $dlg.Close() } 'Bottom,Right')
+    Set-DarkTheme $dlg; Fit-WindowToScreen $dlg 600 320; Safe $load; [void]$dlg.ShowDialog($F)
 }
 function Show-RuntimeInspector($p) {
     $sid = Get-Sid $p
@@ -960,19 +986,14 @@ if (-not (Test-ProtectedScriptLocation)) {
 $wb = [ACM.Native]::GetWindowsBuild()
 if ($wb -gt 0 -and $wb -lt 15063) { Log "WARNING: Windows build $wb detected (< 15063 / 1703). LPAC and DeriveCapabilitySidsFromName are not supported on this OS." }
 if (Test-Admin) { $F.Text = 'AppContainer Manager [ELEVATED - Launch blocked]'; Log 'Running elevated: Launch is blocked for safety. Close and reopen from a normal (non-admin) session to launch.' }
-$bx = 10
-foreach ($b in $script:ProfBtns) {
-    $b.Width = [Math]::Max(52, [Windows.Forms.TextRenderer]::MeasureText($b.Text, $script:FontBody).Width + 18)
-    $b.Location = (Pt $bx 596); $bx += $b.Width + 4
-}
-$bx += 12
+foreach ($b in $script:ProfBtns) { $b.Width = [Math]::Max(52, [Windows.Forms.TextRenderer]::MeasureText($b.Text, $script:FontBody).Width + 18) }
 foreach ($b in $script:ActBtns) {
     if ($b.Text -eq 'Launch') { $b.Tag = 'Primary' }
     $b.Width = [Math]::Max(62, [Windows.Forms.TextRenderer]::MeasureText($b.Text, $script:FontBody).Width + 18)
-    $b.Location = (Pt $bx 596); $bx += $b.Width + 4
 }
 $script:BtnImportPreset.Width = [Math]::Max(110, [Windows.Forms.TextRenderer]::MeasureText($script:BtnImportPreset.Text, $script:FontBody).Width + 20)
-$script:BtnImportPreset.Location = (Pt ($F.ClientSize.Width - $script:BtnImportPreset.Width - 10) 596)
+Fit-WindowToScreen $F 640 540
+$F.add_Resize({ Sync-MainLayout })
 Switch-NavTab $tabContainers
 Set-DarkTheme $F
 Sync-PresetTab
