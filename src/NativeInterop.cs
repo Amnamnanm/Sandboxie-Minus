@@ -12,7 +12,7 @@ namespace ACM
     {
         public string Exe, CommandLine, WorkDir, ContainerName, Desktop;
         public string[] CapabilitySids, Env;
-        public bool Lpac, ChildRestrict, NewConsole, KillOnClose, Wait, WaitTree;
+        public bool Lpac, ChildRestrict, NewConsole, KillOnClose, Wait, WaitTree, IsolateDesktop, AllowSharedDesktop, AllowMic;
         public ulong Mitigation, Mitigation2, ProcessMemMb, JobMemMb;
         public uint JobUiFlags, MaxProcesses, CpuRatePct;
         public uint Pid, ExitCode;
@@ -104,6 +104,50 @@ namespace ACM
         [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
         [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+        [StructLayout(LayoutKind.Sequential)] struct SECURITY_ATTRIBUTES { public int nLength; public IntPtr lpSecurityDescriptor; public bool bInheritHandle; }
+        delegate bool EnumDesktopProc([MarshalAs(UnmanagedType.LPWStr)] string lpszDesktop, IntPtr lParam);
+        delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll", SetLastError = true)] static extern IntPtr GetProcessWindowStation();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserObjectInformationW(IntPtr hObj, int nIndex, IntPtr pvInfo, uint nLength, out uint lpnLengthNeeded);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateDesktopW(string lpszDesktop, string lpszDevice, IntPtr pDevmode, uint dwFlags, uint dwDesiredAccess, ref SECURITY_ATTRIBUTES lpsa);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenDesktopW(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool CloseDesktop(IntPtr hDesktop);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool SwitchDesktop(IntPtr hDesktop);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool EnumDesktopsW(IntPtr hwinsta, EnumDesktopProc lpEnumFunc, IntPtr lParam);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumWindowsProc lpfn, IntPtr lParam);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool GetUserObjectSecurity(IntPtr hObj, ref uint pSIRequested, byte[] pSID, uint nLength, out uint lpnLengthNeeded);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool SetUserObjectSecurity(IntPtr hObj, ref uint pSIRequested, byte[] pSID);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool CreateProcessW(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+        [DllImport("user32.dll")] static extern uint WaitForInputIdle(IntPtr hProcess, uint dwMilliseconds);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+        [DllImport("user32.dll")] static extern int GetWindowLongW(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+        [DllImport("user32.dll", EntryPoint = "GetClassLongW")] static extern uint GetClassLong32(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")] static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageNameW(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool PostMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);
+        [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSRegisterSessionNotification(IntPtr hWnd, uint dwFlags);
+        [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateEventW(ref SECURITY_ATTRIBUTES lpEventAttributes, bool bManualReset, bool bInitialState, string lpName);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetEvent(IntPtr hEvent);
+        [StructLayout(LayoutKind.Sequential)] struct RAWINPUTDEVICE { public ushort usUsagePage, usUsage; public uint dwFlags; public IntPtr hwndTarget; }
+        [StructLayout(LayoutKind.Sequential)] struct RAWINPUTHEADER { public uint dwType, dwSize; public IntPtr hDevice, wParam; }
+        [StructLayout(LayoutKind.Sequential)] struct RAWKEYBOARD { public ushort MakeCode, Flags, Reserved, VKey; public uint Message, ExtraInformation; }
+        [StructLayout(LayoutKind.Sequential)] struct RAWINPUT_KB { public RAWINPUTHEADER header; public RAWKEYBOARD keyboard; }
+        [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
+        [DllImport("user32.dll", SetLastError = true)] static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, out RAWINPUT_KB pData, ref uint pcbSize, uint cbSizeHeader);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(byte[] SecurityDescriptor, uint RequestedStringSDRevision, uint SecurityInformation, out IntPtr StringSecurityDescriptor, out uint StringSecurityDescriptorLen);
         [StructLayout(LayoutKind.Sequential)] struct GENERIC_MAPPING { public uint GenericRead, GenericWrite, GenericExecute, GenericAll; }
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr TokenHandle, int TokenInformationClass, IntPtr TokenInformation, int TokenInformationLength, out int ReturnLength);
@@ -399,12 +443,382 @@ namespace ACM
                 throw new Win32Exception(Marshal.GetLastWin32Error());
         }
 
+        const uint DESK_MANAGE = 0x000E01FF; // READ_CONTROL | WRITE_DAC | WRITE_OWNER | 0x01FF
+        static string GetObjName(IntPtr h)
+        {
+            uint n = 0; GetUserObjectInformationW(h, 2, IntPtr.Zero, 0, out n);
+            if (n == 0) return "";
+            IntPtr b = Marshal.AllocHGlobal((int)n);
+            try { return GetUserObjectInformationW(h, 2, b, n, out n) ? (Marshal.PtrToStringUni(b) ?? "") : ""; }
+            finally { Marshal.FreeHGlobal(b); }
+        }
+        static byte[] GetObjSd(IntPtr h, uint si)
+        {
+            uint n = 0, req = si; GetUserObjectSecurity(h, ref req, null, 0, out n);
+            if (n == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            byte[] b = new byte[n]; req = si;
+            if (!GetUserObjectSecurity(h, ref req, b, n, out n)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            return b;
+        }
+        static byte[] SddlBytes(string sddl)
+        {
+            IntPtr p; uint sz;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out p, out sz)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            try { byte[] b = new byte[sz]; Marshal.Copy(p, b, 0, (int)sz); return b; } finally { LocalFree(p); }
+        }
+        static List<string> GetDeskContainerSids(IntPtr hDesk)
+        {
+            List<string> res = new List<string>();
+            RawSecurityDescriptor sd = new RawSecurityDescriptor(GetObjSd(hDesk, 4), 0);
+            if (sd.DiscretionaryAcl == null) return res;
+            foreach (GenericAce ga in sd.DiscretionaryAcl)
+            {
+                CommonAce ace = ga as CommonAce;
+                if (ace == null || ace.AceQualifier != AceQualifier.AccessAllowed) continue;
+                string s = ace.SecurityIdentifier.Value;
+                if (s.StartsWith("S-1-15-2-", StringComparison.Ordinal) && s.Length > 14 && !res.Contains(s)) res.Add(s);
+            }
+            return res;
+        }
+        static string BuildDeskSddl(string[] acSids, bool withOwner, bool withLabel)
+        {
+            string u = WindowsIdentity.GetCurrent().User.Value, logon = null;
+            using (WindowsIdentity wi = WindowsIdentity.GetCurrent())
+                foreach (IdentityReference ir in wi.Groups) if (ir.Value.StartsWith("S-1-5-5-", StringComparison.Ordinal)) { logon = ir.Value; break; }
+            StringBuilder d = new StringBuilder("D:P(A;;0x000F01FF;;;SY)(A;;0x000F01FF;;;BA)(A;;0x000F01FF;;;S-1-5-90-0)(A;;0x000F01FF;;;" + u + ")");
+            if (logon != null && !string.Equals(logon, u, StringComparison.OrdinalIgnoreCase)) d.Append("(A;;0x000F01FF;;;" + logon + ")");
+            foreach (string s in acSids) d.Append("(A;;0x000200CF;;;" + new SecurityIdentifier(s).Value + ")");
+            return (withOwner ? "O:" + u + "G:" + u : "") + d.ToString() + (withLabel ? "S:(ML;;NW;;;LW)" : "");
+        }
+        static void ApplyDeskSec(IntPtr hDesk, string[] acSids)
+        {
+            uint dSi = 0x80000004U, lSi = 0x00000010U;
+            if (!SetUserObjectSecurity(hDesk, ref dSi, SddlBytes(BuildDeskSddl(acSids, false, false)))) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (!SetUserObjectSecurity(hDesk, ref lSi, SddlBytes("S:(ML;;NW;;;LW)"))) throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        static string CheckDeskSec(IntPtr hDesk, string expAcSid, bool allowMulti)
+        {
+            RawSecurityDescriptor sd = new RawSecurityDescriptor(GetObjSd(hDesk, 4), 0);
+            if (sd.DiscretionaryAcl == null || sd.DiscretionaryAcl.Count == 0) return "Empty/NULL DACL";
+            bool hasTarget = false, seenExp = string.IsNullOrEmpty(expAcSid); int acCount = 0;
+            foreach (GenericAce ga in sd.DiscretionaryAcl)
+            {
+                CommonAce ace = ga as CommonAce;
+                if (ace == null) return "Unsupported ACE type";
+                if (ace.AceQualifier != AceQualifier.AccessAllowed) continue;
+                string s = ace.SecurityIdentifier.Value;
+                if (s == "S-1-1-0" || s == "S-1-5-32-545" || s == "S-1-5-11" || s == "S-1-5-4" || s == "S-1-2-0" || s == "S-1-15-2-1" || s == "S-1-15-2-2" || s.StartsWith("S-1-15-3-", StringComparison.Ordinal))
+                    return "Unsafe Allow ACE: " + s;
+                if (s.StartsWith("S-1-15-2-", StringComparison.Ordinal))
+                {
+                    acCount++;
+                    if (!allowMulti && !string.IsNullOrEmpty(expAcSid) && !string.Equals(s, expAcSid, StringComparison.OrdinalIgnoreCase)) return "Foreign container SID: " + s;
+                    if (!allowMulti && acCount > 1) return "Multiple container SIDs";
+                    if (!string.IsNullOrEmpty(expAcSid) && string.Equals(s, expAcSid, StringComparison.OrdinalIgnoreCase)) seenExp = true;
+                    uint m = unchecked((uint)ace.AccessMask);
+                    if ((m & 0xC3U) != 0xC3U || (m & 0x000D0130U) != 0) return "Invalid container mask 0x" + m.ToString("X");
+                    hasTarget = true;
+                }
+            }
+            if (!hasTarget || !seenExp) return "Missing container ACE";
+            IntPtr pLbl; uint lLen;
+            if (!ConvertSecurityDescriptorToStringSecurityDescriptor(GetObjSd(hDesk, 0x10), 1, 0x10, out pLbl, out lLen)) return "Missing integrity label";
+            string lbl = Marshal.PtrToStringUni(pLbl) ?? ""; LocalFree(pLbl);
+            return (lbl.IndexOf("LW", StringComparison.OrdinalIgnoreCase) >= 0 && lbl.IndexOf("NW", StringComparison.OrdinalIgnoreCase) >= 0) ? null : ("Bad label: " + lbl);
+        }
+        static IntPtr EnsureIsolatedDesktop(string shortName, string acSid, bool allowShared)
+        {
+            if (string.IsNullOrEmpty(shortName) || !shortName.StartsWith("acm.desk.", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Isolated desktop name must start with 'acm.desk.'.");
+            string ws = GetObjName(GetProcessWindowStation());
+            if (!string.Equals(ws, "WinSta0", StringComparison.OrdinalIgnoreCase)) throw new Exception("Isolated desktops require WinSta0 (current: '" + ws + "').");
+            IntPtr hDesk = OpenDesktopW(shortName, 0, false, DESK_MANAGE);
+            if (hDesk != IntPtr.Zero)
+            {
+                try
+                {
+                    List<string> sids = new List<string>();
+                    if (allowShared)
+                    {
+                        string preErr = CheckDeskSec(hDesk, null, true);
+                        if (preErr != null) throw new Exception("Existing shared desktop isolation check failed: " + preErr);
+                        sids.AddRange(GetDeskContainerSids(hDesk));
+                    }
+                    if (!sids.Contains(acSid)) sids.Add(acSid);
+                    try { ApplyDeskSec(hDesk, sids.ToArray()); } catch { }
+                    string e = CheckDeskSec(hDesk, acSid, allowShared);
+                    if (e != null) throw new Exception("Existing desktop isolation check failed: " + e);
+                    return hDesk;
+                }
+                catch { CloseDesktop(hDesk); throw; }
+            }
+            int oe = Marshal.GetLastWin32Error();
+            if (oe == 5) throw new Exception("Desktop '" + shortName + "' already exists and denies access.");
+            if (oe != 2 && oe != 1168) throw new Win32Exception(oe);
+            int ce = 0; string[] oneSid = new[] { acSid };
+            foreach (string sddl in new[] { BuildDeskSddl(oneSid, true, true), BuildDeskSddl(oneSid, false, true), BuildDeskSddl(oneSid, false, false) })
+            {
+                IntPtr pSd; uint sz;
+                if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out pSd, out sz)) { ce = Marshal.GetLastWin32Error(); continue; }
+                try
+                {
+                    SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), lpSecurityDescriptor = pSd };
+                    hDesk = CreateDesktopW(shortName, null, IntPtr.Zero, 0, DESK_MANAGE, ref sa);
+                    if (hDesk != IntPtr.Zero) break;
+                    ce = Marshal.GetLastWin32Error();
+                    if (ce != 1307 && ce != 1314 && ce != 5 && ce != 87) break;
+                }
+                finally { LocalFree(pSd); }
+            }
+            if (hDesk == IntPtr.Zero)
+            {
+                if (ce == 8 || ce == 14) throw new Exception("CreateDesktopW failed (session desktop heap exhausted; close unused desktops in Desktop Manager).");
+                throw new Win32Exception(ce);
+            }
+            try { ApplyDeskSec(hDesk, oneSid); string e = CheckDeskSec(hDesk, acSid, allowShared); if (e != null) throw new Exception("Desktop integrity check failed: " + e); return hDesk; }
+            catch { CloseDesktop(hDesk); throw; }
+        }
+        public static string FindFirstActiveIsolatedDesktop(string fallbackContainerName)
+        {
+            foreach (string d in EnumerateManagedDesktops("acm.desk."))
+            {
+                IntPtr h = OpenDesktopW(d, 0, false, 0x00020081U);
+                if (h == IntPtr.Zero) continue;
+                try
+                {
+                    if (CheckDeskSec(h, null, true) != null) continue;
+                    bool alive = GetDesktopProcessPids(d).Length > 0;
+                    if (!alive)
+                    {
+                        foreach (string s in GetDeskContainerSids(h))
+                            if (GetContainerPids(s).Length > 0) { alive = true; break; }
+                    }
+                    if (alive) return "WinSta0\\" + d;
+                }
+                catch { }
+                finally { CloseDesktop(h); }
+            }
+            string clean = System.Text.RegularExpressions.Regex.Replace(fallbackContainerName ?? "app", "[^A-Za-z0-9._-]", "_").Trim('.', '_', '-');
+            return "WinSta0\\acm.desk." + (clean.Length > 0 ? clean : "app");
+        }
+        static uint DeskAccessCheck(byte[] sdBytes, IntPtr hImp, uint desired)
+        {
+            GENERIC_MAPPING gm = new GENERIC_MAPPING { GenericRead = 0x20041U, GenericWrite = 0x2009EU, GenericExecute = 0x20100U, GenericAll = 0xF01FFU };
+            IntPtr pSd = Marshal.AllocHGlobal(sdBytes.Length), pPriv = Marshal.AllocHGlobal(1024);
+            try
+            {
+                Marshal.Copy(sdBytes, 0, pSd, sdBytes.Length);
+                uint plen = 1024, granted = 0; bool ok = false;
+                return (AccessCheck(pSd, hImp, desired, ref gm, pPriv, ref plen, out granted, out ok) && ok) ? granted : 0U;
+            }
+            finally { Marshal.FreeHGlobal(pPriv); Marshal.FreeHGlobal(pSd); }
+        }
+        static void VerifyLaunchDesktop(IntPtr hDesk, IntPtr hTok, IntPtr hImp, string acSid, bool allowShared)
+        {
+            int tl = 0; GetTokenInformation(hTok, 31, IntPtr.Zero, 0, out tl);
+            if (tl <= 0) throw new Exception("Missing TokenAppContainerSid.");
+            IntPtr tb = Marshal.AllocHGlobal(tl);
+            try { int rl; if (!GetTokenInformation(hTok, 31, tb, tl, out rl) || !string.Equals(SidToString(Marshal.ReadIntPtr(tb)), acSid, StringComparison.OrdinalIgnoreCase)) throw new Exception("Child AppContainer SID mismatch."); }
+            finally { Marshal.FreeHGlobal(tb); }
+            string secErr = CheckDeskSec(hDesk, acSid, allowShared);
+            if (secErr != null) throw new Exception("Desktop integrity check failed: " + secErr);
+            byte[] sd = GetObjSd(hDesk, 0x17);
+            uint g = DeskAccessCheck(sd, hImp, 0x02000000U);
+            if ((g & 0xC3U) != 0xC3U || (g & 0x00040100U) != 0) throw new Exception("Isolated desktop token AccessCheck failed (granted=0x" + g.ToString("X") + ").");
+        }
+        public static string[] EnumerateManagedDesktops(string prefix)
+        {
+            List<string> res = new List<string>();
+            EnumDesktopProc cb = delegate(string n, IntPtr lp) { if (!string.IsNullOrEmpty(n) && (string.IsNullOrEmpty(prefix) || n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) res.Add(n); return true; };
+            if (!EnumDesktopsW(GetProcessWindowStation(), cb, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            GC.KeepAlive(cb); res.Sort(StringComparer.OrdinalIgnoreCase); return res.ToArray();
+        }
+        public static string[] GetDesktopProcessPids(string shortName)
+        {
+            HashSet<uint> pids = new HashSet<uint>();
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x41U);
+            if (h == IntPtr.Zero) return new string[0];
+            try { EnumWindowsProc cb = delegate(IntPtr w, IntPtr lp) { uint p; GetWindowThreadProcessId(w, out p); if (p != 0) pids.Add(p); return true; }; EnumDesktopWindows(h, cb, IntPtr.Zero); GC.KeepAlive(cb); }
+            finally { CloseDesktop(h); }
+            List<string> list = new List<string>();
+            foreach (uint p in pids) { string nm = "pid"; try { using (var pr = System.Diagnostics.Process.GetProcessById((int)p)) nm = pr.ProcessName; } catch { } list.Add(p + "|" + nm); }
+            return list.ToArray();
+        }
+        public static string InspectDesktopSecurity(string shortName, string expAcSid)
+        {
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x00020081U);
+            if (h == IntPtr.Zero) { int e = Marshal.GetLastWin32Error(); return e == 5 ? "ACCESS_DENIED|Denies inspection" : "WARN|Error " + e; }
+            try { string err = CheckDeskSec(h, expAcSid, true); return err == null ? "OK|Isolated (Low/NW, strict container DACL)" : ("WARN|" + err); }
+            catch (Exception ex) { return "WARN|" + ex.Message; } finally { CloseDesktop(h); }
+        }
+        public static void ReSecureDesktop(string shortName, string containerName)
+        {
+            string acSid = GetSidString(containerName);
+            IntPtr h = OpenDesktopW(shortName, 0, false, DESK_MANAGE);
+            if (h == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            try { string[] one = new[] { acSid }; ApplyDeskSec(h, one); string e = CheckDeskSec(h, acSid, false); if (e != null) throw new Exception(e); } finally { CloseDesktop(h); }
+        }
+        public static IntPtr CreateInheritableEvent()
+        {
+            SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), bInheritHandle = true };
+            IntPtr h = CreateEventW(ref sa, false, false, null);
+            if (h == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            return h;
+        }
+        public static void SignalEvent(IntPtr h) { if (h != IntPtr.Zero) SetEvent(h); }
+        public static bool WaitEvent(IntPtr h, int ms) { return h != IntPtr.Zero && WaitForSingleObject(h, unchecked((uint)ms)) == 0U; }
+        public static IntPtr OpenProcessWait(int pid) { return OpenProcess(0x00100000U, false, (uint)pid); }
+        public static void CloseKernelHandle(IntPtr h) { if (h != IntPtr.Zero) CloseHandle(h); }
+        public static int StartHiddenOnDesktop(string exe, string cmdLine, string shortDesktop, bool inheritHandles)
+        {
+            STARTUPINFO si = new STARTUPINFO(); si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+            if (!string.IsNullOrEmpty(shortDesktop)) si.lpDesktop = "WinSta0\\" + shortDesktop;
+            string fullCmd = "\"" + exe + "\" " + cmdLine;
+            StringBuilder cmd = new StringBuilder(fullCmd, Math.Max(fullCmd.Length + 1, 1024));
+            PROCESS_INFORMATION pi;
+            if (!CreateProcessW(exe, cmd, IntPtr.Zero, IntPtr.Zero, inheritHandles, CREATE_NO_WINDOW, IntPtr.Zero, null, ref si, out pi))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            return (int)pi.dwProcessId;
+        }
+        public static void RegisterSessionUnlock(IntPtr hwnd, bool enable)
+        {
+            if (enable) WTSRegisterSessionNotification(hwnd, 0); else WTSUnRegisterSessionNotification(hwnd);
+        }
+        public static void RegisterKeyboardRawInput(IntPtr hwnd)
+        {
+            RAWINPUTDEVICE[] rid = new RAWINPUTDEVICE[1];
+            rid[0] = new RAWINPUTDEVICE { usUsagePage = 1, usUsage = 6, dwFlags = 0x100U, hwndTarget = hwnd };
+            RegisterRawInputDevices(rid, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
+        }
+        public static int GetRawKeyAction(IntPtr lParam)
+        {
+            RAWINPUT_KB kb; uint sz = (uint)Marshal.SizeOf(typeof(RAWINPUT_KB));
+            if (GetRawInputData(lParam, 0x10000003U, out kb, ref sz, (uint)Marshal.SizeOf(typeof(RAWINPUTHEADER))) == unchecked((uint)-1)) return 0;
+            if (kb.header.dwType != 1U) return 0;
+            bool down = (kb.keyboard.Flags & 1) == 0, e0 = (kb.keyboard.Flags & 2) != 0;
+            if (kb.keyboard.VKey == 0x11 && down && e0) return 1; // Right Ctrl
+            if ((kb.keyboard.VKey == 0x12 || kb.keyboard.VKey == 0xA4 || kb.keyboard.VKey == 0xA5) && !down) return 7; // Alt up
+            if (kb.keyboard.VKey == 0x1B && down) return 8; // Esc
+            if (kb.keyboard.VKey == 0x09 && down && (GetAsyncKeyState(0x12) & 0x8000) != 0)
+                return ((GetAsyncKeyState(0x10) & 0x8000) != 0) ? 6 : 2; // Alt+Shift+Tab : Alt+Tab
+            if (kb.keyboard.VKey == 0x5B || kb.keyboard.VKey == 0x5C) return down ? 3 : 4; // Win down/up
+            return down ? 5 : 0;
+        }
+        [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+        public static void EnableDpiAware() { try { SetProcessDPIAware(); } catch { } }
+        public static bool IsRightCtrlDownAsync() { return (GetAsyncKeyState(0xA3) & 0x8000) != 0; }
+        public static bool IsAltDownAsync() { return (GetAsyncKeyState(0x12) & 0x8000) != 0; }
+        public static bool IsRightMouseDownAsync() { return (GetAsyncKeyState(0x02) & 0x8000) != 0; }
+        public static IntPtr GetActiveWindowHandle() { return GetForegroundWindow(); }
+        public static IntPtr GetWindowIconHandle(IntPtr hwnd)
+        {
+            IntPtr hIcon = IntPtr.Zero;
+            if (SendMessageTimeoutW(hwnd, 0x007FU, new IntPtr(2), IntPtr.Zero, 0x0002U, 80, out hIcon) != IntPtr.Zero && hIcon != IntPtr.Zero) return hIcon;
+            if (SendMessageTimeoutW(hwnd, 0x007FU, IntPtr.Zero, IntPtr.Zero, 0x0002U, 80, out hIcon) != IntPtr.Zero && hIcon != IntPtr.Zero) return hIcon;
+            if (SendMessageTimeoutW(hwnd, 0x007FU, new IntPtr(1), IntPtr.Zero, 0x0002U, 80, out hIcon) != IntPtr.Zero && hIcon != IntPtr.Zero) return hIcon;
+            hIcon = (IntPtr.Size == 8) ? GetClassLongPtr64(hwnd, -34) : new IntPtr(GetClassLong32(hwnd, -34));
+            if (hIcon != IntPtr.Zero) return hIcon;
+            return (IntPtr.Size == 8) ? GetClassLongPtr64(hwnd, -14) : new IntPtr(GetClassLong32(hwnd, -14));
+        }
+        public static string GetProcessImagePath(uint pid)
+        {
+            IntPtr hp = OpenProcess(0x1000U, false, pid);
+            if (hp == IntPtr.Zero) return "";
+            try
+            {
+                StringBuilder sb = new StringBuilder(1024); uint sz = (uint)sb.Capacity;
+                return QueryFullProcessImageNameW(hp, 0, sb, ref sz) ? sb.ToString() : "";
+            }
+            finally { CloseHandle(hp); }
+        }
+        public static string[] GetDesktopAppWindows(string shortName, uint excludePid)
+        {
+            List<string> res = new List<string>();
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x41U);
+            if (h == IntPtr.Zero) return res.ToArray();
+            try
+            {
+                EnumWindowsProc cb = delegate(IntPtr w, IntPtr lp)
+                {
+                    if (!IsWindowVisible(w) || GetWindow(w, 4) != IntPtr.Zero || (GetWindowLongW(w, -20) & 0x80) != 0) return true;
+                    uint pid; GetWindowThreadProcessId(w, out pid);
+                    if (pid == 0 || pid == excludePid) return true;
+                    StringBuilder sb = new StringBuilder(128);
+                    if (GetWindowTextW(w, sb, sb.Capacity) <= 0) return true;
+                    res.Add(w.ToInt64().ToString() + "|" + pid.ToString() + "|" + sb.ToString().Replace("|", " "));
+                    return true;
+                };
+                EnumDesktopWindows(h, cb, IntPtr.Zero); GC.KeepAlive(cb);
+            }
+            finally { CloseDesktop(h); }
+            return res.ToArray();
+        }
+        public static string[] GetDesktopContainerPids(string shortName)
+        {
+            List<string> res = new List<string>();
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x00020001U);
+            if (h == IntPtr.Zero) return res.ToArray();
+            try { foreach (string cs in GetDeskContainerSids(h)) res.AddRange(GetContainerPids(cs)); }
+            catch { }
+            finally { CloseDesktop(h); }
+            return res.ToArray();
+        }
+        public static bool IsDesktopInUse(string shortName, uint excludePid)
+        {
+            foreach (string s in GetDesktopProcessPids(shortName))
+            {
+                int i = s.IndexOf('|'); uint p;
+                if (i > 0 && uint.TryParse(s.Substring(0, i), out p) && p != excludePid) return true;
+            }
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x00020001U);
+            if (h != IntPtr.Zero)
+            {
+                try
+                {
+                    foreach (string cs in GetDeskContainerSids(h))
+                        if (GetContainerPids(cs).Length > 0) return true;
+                }
+                catch { }
+                finally { CloseDesktop(h); }
+            }
+            return false;
+        }
+        public static void ActivateAppWindow(IntPtr hwnd) { if (IsIconic(hwnd)) ShowWindowAsync(hwnd, 9); SwitchToThisWindow(hwnd, true); SetForegroundWindow(hwnd); }
+        public static void MinimizeAppWindow(IntPtr hwnd) { ShowWindowAsync(hwnd, 6); }
+        public static void CloseAppWindow(IntPtr hwnd) { PostMessageW(hwnd, 0x0010U, IntPtr.Zero, IntPtr.Zero); }
+        public static void SetWindowZ(IntPtr hwnd, bool topMost) { SetWindowPos(hwnd, topMost ? new IntPtr(-1) : new IntPtr(1), 0, 0, 0, 0, 0x0013U); }
+        public static void SwitchToDesktopByName(string shortName)
+        {
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x0100U);
+            if (h == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            try { if (!SwitchDesktop(h)) throw new Win32Exception(Marshal.GetLastWin32Error()); } finally { CloseDesktop(h); }
+        }
+        public static int TerminateDesktopProcesses(string shortName, string optSid)
+        {
+            HashSet<uint> pids = new HashSet<uint>(); uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+            List<string> entries = new List<string>(GetDesktopProcessPids(shortName));
+            if (!string.IsNullOrEmpty(optSid)) entries.AddRange(GetContainerPids(optSid));
+            IntPtr h = OpenDesktopW(shortName, 0, false, 0x00020001U);
+            if (h != IntPtr.Zero)
+            {
+                try { foreach (string cs in GetDeskContainerSids(h)) entries.AddRange(GetContainerPids(cs)); }
+                catch { }
+                finally { CloseDesktop(h); }
+            }
+            foreach (string s in entries) { int i = s.IndexOf('|'); uint p; if (i > 0 && uint.TryParse(s.Substring(0, i), out p) && p != self) pids.Add(p); }
+            int k = 0; foreach (uint p in pids) { IntPtr hp = OpenProcess(1, false, p); if (hp != IntPtr.Zero) { try { if (TerminateProcess(hp, 1)) k++; } finally { CloseHandle(hp); } } }
+            return k;
+        }
+        public static bool DesktopExists(string shortName) { IntPtr h = OpenDesktopW(shortName, 0, false, 0x41U); if (h != IntPtr.Zero) { CloseDesktop(h); return true; } return Marshal.GetLastWin32Error() == 5; }
+
         public static void Launch(LaunchOptions o)
         {
             IntPtr acSid = IntPtr.Zero, caps = IntPtr.Zero, sc = IntPtr.Zero, attr = IntPtr.Zero;
-            IntPtr pAap = IntPtr.Zero, pMit = IntPtr.Zero, pChild = IntPtr.Zero, env = IntPtr.Zero, job = IntPtr.Zero, iocp = IntPtr.Zero;
+            IntPtr pAap = IntPtr.Zero, pMit = IntPtr.Zero, pChild = IntPtr.Zero, env = IntPtr.Zero, job = IntPtr.Zero, iocp = IntPtr.Zero, hDesk = IntPtr.Zero;
             List<IntPtr> sids = new List<IntPtr>();
             PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
+            string acSidStr = null, shortDesk = null;
             bool created = false, attrInit = false, success = false;
             try
             {
@@ -502,6 +916,22 @@ namespace ACM
 // 1 = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED (prevent child process creation)
                 if (o.ChildRestrict) { pChild = Marshal.AllocHGlobal(4); Marshal.WriteInt32(pChild, 1); SetAttr(attr, ATTR_CHILD_PROCESS_POLICY, pChild, 4); }
 
+                acSidStr = SidToString(acSid);
+                if (o.IsolateDesktop)
+                {
+                    if ((o.JobUiFlags & 0x61U) != 0x61U) throw new Exception("Security error: IsolateDesktop requires JOB_OBJECT_UILIMIT_HANDLES | GLOBALATOMS | DESKTOP.");
+                    if (o.CapabilitySids != null)
+                    {
+                        try { foreach (string gs in DeriveCapability("graphicsCapture")) if (Array.Exists(o.CapabilitySids, delegate(string x) { return string.Equals(x, gs, StringComparison.OrdinalIgnoreCase); })) throw new Exception("Security error: graphicsCapture blocked with IsolateDesktop."); } catch (Win32Exception) { }
+                        if (!o.AllowMic && Array.Exists(o.CapabilitySids, delegate(string x) { return string.Equals(x, "S-1-15-3-787448254-1207972858-3558633622-1059886964", StringComparison.OrdinalIgnoreCase); }))
+                            throw new Exception("Security error: audio capture SID present while Dev.Mic is off.");
+                    }
+                    int sl = o.Desktop == null ? -1 : o.Desktop.IndexOf('\\');
+                    if (sl <= 0 || !string.Equals(o.Desktop.Substring(0, sl), "WinSta0", StringComparison.OrdinalIgnoreCase)) throw new Exception("Isolated desktop must be WinSta0\\<name>.");
+                    shortDesk = o.Desktop.Substring(sl + 1);
+                    hDesk = EnsureIsolatedDesktop(shortDesk, acSidStr, o.AllowSharedDesktop);
+                }
+
                 STARTUPINFOEX si = new STARTUPINFOEX();
                 si.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
                 if (!string.IsNullOrEmpty(o.Desktop)) si.StartupInfo.lpDesktop = o.Desktop;
@@ -561,6 +991,16 @@ namespace ACM
                             if (hImp != IntPtr.Zero) CloseHandle(hImp);
                         }
                     }
+                    if (o.IsolateDesktop)
+                    {
+                        IntPtr hImpDesk = IntPtr.Zero;
+                        try
+                        {
+                            if (!DuplicateToken(hTok, 2, out hImpDesk)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                            VerifyLaunchDesktop(hDesk, hTok, hImpDesk, acSidStr, o.AllowSharedDesktop);
+                        }
+                        finally { if (hImpDesk != IntPtr.Zero) CloseHandle(hImpDesk); }
+                    }
                 }
                 finally { CloseHandle(hTok); }
 
@@ -611,6 +1051,12 @@ namespace ACM
                 {
                     IntPtr pui = Marshal.AllocHGlobal(4); Marshal.WriteInt32(pui, unchecked((int)o.JobUiFlags));
                     bool ok = SetInformationJobObject(job, 4, pui, 4); int err = Marshal.GetLastWin32Error();
+                    if (ok && o.IsolateDesktop)
+                    {
+                        Marshal.WriteInt32(pui, 0);
+                        if (!QueryInformationJobObject(job, 4, pui, 4, IntPtr.Zero) || (Marshal.ReadInt32(pui) & 0x61) != 0x61)
+                            { Marshal.FreeHGlobal(pui); throw new Exception("Security error: Job UI desktop/atom/handle limits were not applied."); }
+                    }
                     Marshal.FreeHGlobal(pui); if (!ok) throw new Win32Exception(err);
                 }
                 if (o.Wait && o.WaitTree)
@@ -630,6 +1076,7 @@ namespace ACM
                 if (!AssignProcessToJobObject(job, pi.hProcess)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 if (ResumeThread(pi.hThread) == 0xFFFFFFFF) throw new Win32Exception(Marshal.GetLastWin32Error());
                 o.Pid = pi.dwProcessId;
+                if (!o.Wait && hDesk != IntPtr.Zero && WaitForInputIdle(pi.hProcess, 2000) == 0xFFFFFFFFU) System.Threading.Thread.Sleep(200);
                 if (o.Wait)
                 {
                     WaitForSingleObject(pi.hProcess, 0xFFFFFFFF);
@@ -661,8 +1108,9 @@ namespace ACM
             }
             finally
             {
-                if (!success && created) TerminateProcess(pi.hProcess, 1);
+                if (!success && created) { TerminateProcess(pi.hProcess, 1); WaitForSingleObject(pi.hProcess, 2000); }
                 if (created) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+                if (hDesk != IntPtr.Zero) CloseDesktop(hDesk);
                 if (iocp != IntPtr.Zero) CloseHandle(iocp);
                 if (job != IntPtr.Zero) CloseHandle(job);
                 if (attrInit) DeleteProcThreadAttributeList(attr);

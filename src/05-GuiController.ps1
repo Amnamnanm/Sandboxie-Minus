@@ -124,7 +124,8 @@ function Select-Profile($p) {
     $t = $script:T
     $t.Name.Text = $p.Name; $t.Desc.Text = $p.Description; $t.Exe.Text = $p.ExePath; $t.Args.Text = $p.Arguments; $t.Work.Text = $p.WorkDir
     $t.Extra.Text = $p.ExtraCaps; $t.FwList.Text = $p.Net.FwBlockList; $t.SrvPorts.Text = [string]$p.Net.ServerInboundPorts
-    $t.EnvAllow.Text = [string]$p.EnvAllow; $t.EnvCustom.Text = [string]$p.EnvCustom; $t.Desktop.Text = [string]$p.CustomDesktop
+    $script:ManualDesktopBuf = [string]$p.CustomDesktop
+    $t.EnvAllow.Text = [string]$p.EnvAllow; $t.EnvCustom.Text = [string]$p.EnvCustom; $t.Desktop.Text = $script:ManualDesktopBuf
     $script:EnvModeCmb.SelectedIndex = if ($p.EnvMode -eq 'InheritHost') { 1 } else { 0 }
     if ($p.Limits) {
         # Clamp imported JSON values to NumericUpDown bounds to avoid ArgumentOutOfRangeException
@@ -150,6 +151,7 @@ function Select-Profile($p) {
         $rv = if ($rr.PSObject.Properties.Name -contains 'View' -and $rr.View) { [string]$rr.View } else { 'Both' }
         Add-RegRow $rr.Path $rr.Scope $rr.Access $rv
     }
+    Update-DesktopFieldState
     Update-Status $p
     Sync-PresetTab
 }
@@ -186,7 +188,9 @@ function Save-UiToProfile {
     $p.Description = $t.Desc.Text; $p.ExePath = $t.Exe.Text.Trim().Trim('"'); $p.Arguments = $t.Args.Text; $p.WorkDir = $t.Work.Text.Trim().Trim('"')
     $p.ExtraCaps = $t.Extra.Text; $p.Net.FwBlockList = $t.FwList.Text; $p.Net.ServerInboundPorts = $t.SrvPorts.Text
     $p.EnvMode = if ($script:EnvModeCmb.SelectedIndex -eq 1) { 'InheritHost' } else { 'Allowlist' }
-    $p.EnvAllow = $t.EnvAllow.Text; $p.EnvCustom = $t.EnvCustom.Text; $p.CustomDesktop = $t.Desktop.Text.Trim()
+    $p.EnvAllow = $t.EnvAllow.Text; $p.EnvCustom = $t.EnvCustom.Text
+    if ($script:Chk['Hard.IsolateDesktop'] -and $script:Chk['Hard.IsolateDesktop'].Checked) { $p.CustomDesktop = [string]$script:ManualDesktopBuf }
+    else { $script:ManualDesktopBuf = $t.Desktop.Text.Trim(); $p.CustomDesktop = $script:ManualDesktopBuf }
     $p.Limits = [pscustomobject]@{
         MaxProcesses = [int]$script:NumMaxProc.Value; ProcessMemMb = [int]$script:NumProcMem.Value
         JobMemMb = [int]$script:NumJobMem.Value; CpuRatePct = [int]$script:NumCpuPct.Value
@@ -201,6 +205,7 @@ function Clear-ProfileUi {
     $script:Cur = $null
     foreach ($tb in $script:T.Values) { $tb.Text = '' }
     foreach ($cb in $script:Chk.Values) { $cb.Checked = $false }
+    $script:ManualDesktopBuf = ''; if ($script:T.Desktop) { $script:T.Desktop.ReadOnly = $false; $script:T.Desktop.BackColor = $script:Theme.Input }
     $script:CurUsbHidMode = 'Off'; $script:CurUsbHidDevices = @(); Update-UsbHidLabel
     $script:EnvModeCmb.SelectedIndex = 0
     $script:NumMaxProc.Value = 0; $script:NumProcMem.Value = 0; $script:NumJobMem.Value = 0; $script:NumCpuPct.Value = 0
@@ -426,7 +431,7 @@ function Show-PresetImportDialog($parsed) {
             $finalRules += [pscustomobject]@{ Path = $resolvedPath; Scope = (Resolve-PathScopeKey $r.Scope); Access = $r.Access; Force = [bool]$r.Force }
         }
         $p.Rules = @($finalRules)
-        $p.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Loopback = $false; Firewall = $false }
+        $p.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Devices = @(); Loopback = $false; Firewall = $false }
         $script:ImportDialogResult = $p
         $dlg.DialogResult = 'OK'
         $dlg.Close()
@@ -526,6 +531,12 @@ function Invoke-Audit {
     if ($p.Hard.FollowReparse) { Log '  !! WARNING: FollowReparse is ON (junction/symlink traversal enabled during Apply).' }
     if (-not $p.Hard.NoClipboard) { Log '  !! WARNING: NoClipboard is OFF (sandboxed app can read/write host clipboard).' }
     if (-not $p.Hard.NoDesktopSys) { Log '  !! WARNING: NoDesktopSys is OFF (Job UI limits disabled).' }
+    if (-not $p.Hard.IsolateDesktop) { Log '  !! WARNING: IsolateDesktop is OFF (shares WinSta0\Default).' }
+    else {
+        if ($p.ExtraCaps -match '(?i)\bgraphicsCapture\b') { Log '  !! WARNING: graphicsCapture conflicts with IsolateDesktop (blocked at launch).' }
+        $ds = Get-IsolatedDesktopShortName (Get-ContainerName $p)
+        if ([ACM.Native]::DesktopExists($ds)) { Log "  Desktop '$ds' live check: $([ACM.Native]::InspectDesktopSecurity($ds, $sid))" }
+    }
     if ($p.EnvMode -eq 'InheritHost') { Log '  !! WARNING: EnvMode is InheritHost (exposes host environment variables/secrets).' }
     if (-not $p.Hard.RedirectProfile) { Log '  !! WARNING: RedirectProfile is OFF (exposes host USERPROFILE/APPDATA paths).' }
     if ($p.Net.Server -and $p.Net.ServerAllowInbound -and [string]::IsNullOrWhiteSpace($p.Net.ServerInboundPorts)) {
@@ -628,6 +639,95 @@ function Invoke-Audit {
     }
     Log 'Audit finished.'
 }
+$script:ManualDesktopBuf = ''
+function Update-DesktopFieldState {
+    $cb = $script:Chk['Hard.IsolateDesktop']; $cbJoin = $script:Chk['Hard.JoinFirstDesktop']; $tb = $script:T.Desktop; if (-not $cb -or -not $tb) { return }
+    if ($cbJoin) { $cbJoin.Enabled = $cb.Checked }
+    if ($cb.Checked) {
+        if (-not $script:Loading -and -not $tb.ReadOnly) { $script:ManualDesktopBuf = $tb.Text.Trim() }
+        $tb.ReadOnly = $true; $tb.BackColor = $script:Theme.Surface
+        $tb.Text = if (-not $script:Cur) { '' } elseif ($cbJoin -and $cbJoin.Checked) { '(auto-joins first active acm.desk.* at launch, or creates ' + (Get-IsolatedDesktopPath (Get-ContainerName $script:Cur)) + ')' } else { Get-IsolatedDesktopPath (Get-ContainerName $script:Cur) }
+    } else {
+        $tb.ReadOnly = $false; $tb.BackColor = $script:Theme.Input
+        if (-not $script:Loading) { $tb.Text = [string]$script:ManualDesktopBuf }
+    }
+}
+if ($script:Chk['Hard.IsolateDesktop']) { $script:Chk['Hard.IsolateDesktop'].add_CheckedChanged({ if (-not $script:Loading) { Update-DesktopFieldState } }) }
+if ($script:Chk['Hard.JoinFirstDesktop']) { $script:Chk['Hard.JoinFirstDesktop'].add_CheckedChanged({ if (-not $script:Loading) { Update-DesktopFieldState } }) }
+function Show-DesktopManagerDialog {
+    $dlg = Ctl Form @{ Text = 'Isolated Desktop Manager (WinSta0)'; ClientSize = (Sz 840 470); StartPosition = 'CenterParent'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false } $null
+    $chkAll = Ctl CheckBox @{ Text = 'Show all WinSta0 desktops (non-ACM desktops are read-only)'; Location = (Pt 14 12); Size = (Sz 520 22) } $dlg
+    $dg = Ctl DataGridView @{ Location = (Pt 14 40); Size = (Sz 812 340); AllowUserToAddRows = $false; RowHeadersVisible = $false; SelectionMode = 'FullRowSelect'; MultiSelect = $false; AutoSizeColumnsMode = 'Fill'; BackgroundColor = [Drawing.SystemColors]::Window; ReadOnly = $true } $dlg
+    foreach ($col in @(@('Desktop', 24), @('Profile', 20), @('Processes', 22), @('Security', 34))) {
+        $c = New-Object Windows.Forms.DataGridViewTextBoxColumn; $c.Name = $col[0]; $c.HeaderText = $col[0]; $c.FillWeight = $col[1]; [void]$dg.Columns.Add($c)
+    }
+    $profMap = @{}; foreach ($pr in $script:Profiles) { $profMap[(Get-IsolatedDesktopShortName (Get-ContainerName $pr)).ToLowerInvariant()] = $pr }
+    $load = {
+        $dg.Rows.Clear()
+        foreach ($d in [ACM.Native]::EnumerateManagedDesktops($(if ($chkAll.Checked) { '' } else { 'acm.desk.' }))) {
+            $pr = $profMap[$d.ToLowerInvariant()]
+            $cn = if ($pr) { Get-ContainerName $pr } elseif ($d -like 'acm.desk.*') { $d.Substring(9) } else { '' }
+            $sid = if ($cn) { try { [ACM.Native]::GetSidString($cn) } catch { '' } } else { '' }
+            $pLabel = if ($pr) { "$($pr.Name) ($cn)" } elseif ($d -like 'acm.desk.acm.eph.*') { '[Ephemeral]' } elseif ($d -like 'acm.desk.*') { '[Orphan / Unmatched]' } else { '[System]' }
+            $procs = @([ACM.Native]::GetDesktopProcessPids($d)) + $(if ($sid) { @([ACM.Native]::GetContainerPids($sid)) } else { @() }) + $(if ($d -like 'acm.desk.*') { @([ACM.Native]::GetDesktopContainerPids($d)) } else { @() }) | Select-Object -Unique
+            $sec = if ($d -like 'acm.desk.*') { [ACM.Native]::InspectDesktopSecurity($d, $sid) } else { 'System desktop' }
+            $pTxt = if ($procs.Count -gt 4) { ($procs[0..3] -join ', ') + " (+$($procs.Count - 4) more)" } elseif ($procs.Count) { $procs -join ', ' } else { '(none / handle held)' }
+            $ri = $dg.Rows.Add($d, $pLabel, $pTxt, $sec)
+            if ($procs.Count) { $dg.Rows[$ri].Cells['Processes'].ToolTipText = ($procs -join "`r`n") }
+            $dg.Rows[$ri].Tag = [pscustomobject]@{ Name = $d; Cn = $cn; Sid = $sid; IsAcm = ($d -like 'acm.desk.*') }
+        }
+    }
+    $chkAll.add_CheckedChanged({ Safe $load })
+    [void](Ctl Label @{ Text = 'Watchdog timeout (sec, 0=off; RCtrl=back):'; Location = (Pt 14 394); AutoSize = $true } $dlg)
+    $numRet = Ctl NumericUpDown @{ Location = (Pt 275 391); Size = (Sz 60 24); Minimum = 0; Maximum = 120; Value = 10 } $dlg
+    [void](Btn 'Refresh' 14 430 82 $dlg { Safe $load })
+    [void](Btn 'Switch To' 102 430 96 $dlg { Safe {
+        if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
+        $m = $dg.SelectedRows[0].Tag; $sec = [int]$numRet.Value
+        if ($sec -eq 0 -and [Windows.Forms.MessageBox]::Show("Switch to '$($m.Name)' with watchdog timeout OFF? Press Right Ctrl (or Win+L -> unlock) to return.", 'Switch Desktop', 'YesNo', 'Warning') -ne 'Yes') { return }
+        if ($m.IsAcm) {
+            $wa = @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $script:MainScriptPath, '-DeskWatch', $m.Name, '-AutoReturnSec', "$sec")
+            [void](Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList (Format-ArgString $wa) -WindowStyle Hidden)
+        } else {
+            [ACM.Native]::SwitchToDesktopByName($m.Name)
+            if ($sec -gt 0) { $t = New-Object Windows.Forms.Timer; $t.Interval = $sec * 1000; $t.add_Tick({ param($s,$e) $s.Stop(); $s.Dispose(); try { [ACM.Native]::SwitchToDesktopByName('Default') } catch {} }); $t.Start() }
+        }
+    } })
+    [void](Btn 'Re-secure ACL' 204 430 116 $dlg { Safe {
+        if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
+        $m = $dg.SelectedRows[0].Tag; if (-not $m.IsAcm) { throw 'Only ACM desktops can be modified.' }
+        [ACM.Native]::ReSecureDesktop($m.Name, $m.Cn); Log "Re-secured '$($m.Name)'."; & $load
+    } })
+    [void](Btn 'Terminate & Close' 326 430 132 $dlg { Safe {
+        if (-not $dg.SelectedRows.Count) { throw 'Select a desktop first.' }
+        $m = $dg.SelectedRows[0].Tag; if (-not $m.IsAcm) { throw 'Only ACM desktops can be terminated.' }
+        if ([Windows.Forms.MessageBox]::Show("Terminate all processes on '$($m.Name)' so Windows reclaims it?", 'Terminate & Close', 'YesNo', 'Warning') -ne 'Yes') { return }
+        $k = [ACM.Native]::TerminateDesktopProcesses($m.Name, $m.Sid)
+        $dlg.Enabled = $false
+        try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while ([ACM.Native]::DesktopExists($m.Name) -and $sw.ElapsedMilliseconds -lt 10000) {
+                [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 250
+            }
+            if ([ACM.Native]::DesktopExists($m.Name)) {
+                $k += [ACM.Native]::TerminateDesktopProcesses($m.Name, $m.Sid)
+                $pr = $profMap[$m.Name.ToLowerInvariant()]
+                $rx = [regex]::Escape($m.Name) + $(if ($pr) { '|' + [regex]::Escape($pr.Name) } else { '' })
+                try {
+                    foreach ($wp in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'")) {
+                        if ($wp.ProcessId -ne $PID -and $wp.CommandLine -match '-(DeskWatch|DeskBar|Launch)\b' -and $wp.CommandLine -match $rx) {
+                            Stop-Process -Id $wp.ProcessId -Force -ErrorAction SilentlyContinue; $k++
+                        }
+                    }
+                } catch {}
+                Start-Sleep -Milliseconds 300
+            }
+        } finally { $dlg.Enabled = $true }
+        Log "Terminated $k process(es) on '$($m.Name)'. Still exists: $([ACM.Native]::DesktopExists($m.Name))."; & $load
+    } })
+    [void](Btn 'Close' 726 430 100 $dlg { $dlg.Close() })
+    Set-DarkTheme $dlg; Safe $load; [void]$dlg.ShowDialog($F)
+}
 function Show-RuntimeInspector($p) {
     $sid = Get-Sid $p
     $cn = Get-ContainerName $p
@@ -638,7 +738,11 @@ function Show-RuntimeInspector($p) {
     $fwCount = 0
     try { $fwCount = @(Get-NetFirewallRule -Group $fwGrp -ErrorAction SilentlyContinue).Count } catch {}
     $msg = "Profile: $($p.Name)`r`nContainer ID: $cn`r`nSID: $sid`r`n`r`nRunning processes in container: $($pids.Count)`r`n"
-    if ($pids.Count -gt 0) { $msg += (($pids -join "`r`n") + "`r`n") }
+    if ($pids.Count -gt 0) {
+        $shown = $pids | Select-Object -First 25
+        $msg += (($shown -join "`r`n") + "`r`n")
+        if ($pids.Count -gt 25) { $msg += "... and $($pids.Count - 25) more`r`n" }
+    }
     $msg += "`r`nSystem CheckNetIsolation loopback exempt: $hasLb`r`nActive Defender Firewall rules ($fwGrp): $fwCount"
     if ($pids.Count -gt 0) {
         $msg += "`r`n`r`nTerminate all running processes in this container?"
@@ -688,7 +792,7 @@ $script:ProfBtns += Btn 'Clone' 76 546 62 $F { Safe {
     $n = Assert-ValidProfileName $n
     if (Find-Profile $n) { throw "A profile named '$n' already exists." }
     $c = Merge-Obj (New-ProfileObject $n) (($p | ConvertTo-Json -Depth 8) | ConvertFrom-Json)
-    $c.Name = $n; $c.ContainerId = New-UniqueContainerId $n; $c.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Loopback = $false; Firewall = $false }
+    $c.Name = $n; $c.ContainerId = New-UniqueContainerId $n; $c.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Devices = @(); Loopback = $false; Firewall = $false }
     [void]$script:Profiles.Add($c)
     if (Test-Admin) { Save-Config; Refresh-List $n; Save-UiToProfile; Sync-SavedSnapshot }
     else {
@@ -740,6 +844,9 @@ $script:ActBtns += Btn 'Apply (admin)' 308 546 94 $F { Safe {
     if (-not $p.Hard.NoDesktopSys) {
         if ([Windows.Forms.MessageBox]::Show("Desktop/USER handle Job UI limits are OFF! Continue anyway?", 'Weakened isolation (Job UI OFF)', 'YesNo', 'Warning') -ne 'Yes') { return }
     }
+    if (-not $p.Hard.IsolateDesktop) {
+        if ([Windows.Forms.MessageBox]::Show("IsolateDesktop is OFF! App shares WinSta0\Default. Continue anyway?", 'Shared desktop (IsolateDesktop OFF)', 'YesNo', 'Warning') -ne 'Yes') { return }
+    }
     if (-not $p.Hard.Lpac) {
         if ([Windows.Forms.MessageBox]::Show("LPAC is OFF! Standard AppContainer keeps ALL APPLICATION PACKAGES (S-1-15-2-1), allowing reads wherever S-1-15-2-1 has access. Continue anyway?", 'Weakened isolation (LPAC OFF)', 'YesNo', 'Warning') -ne 'Yes') { return }
     }
@@ -775,6 +882,11 @@ $script:ActBtns += Btn 'Launch' 406 546 64 $F { Safe {
     }
     if (-not $p.Hard.NoDesktopSys) {
         if ([Windows.Forms.MessageBox]::Show("Desktop/USER handle Job UI limits are OFF! Launch anyway?", 'Weakened isolation (Job UI OFF)', 'YesNo', 'Warning') -ne 'Yes') { return }
+    }
+    if (-not $p.Hard.IsolateDesktop) {
+        if ([Windows.Forms.MessageBox]::Show("IsolateDesktop is OFF! App shares WinSta0\Default. Launch anyway?", 'Shared desktop (IsolateDesktop OFF)', 'YesNo', 'Warning') -ne 'Yes') { return }
+    } elseif ($p.ExtraCaps -match '(?i)\bgraphicsCapture\b') {
+        throw 'IsolateDesktop cannot be combined with graphicsCapture.'
     }
     $unkCaps = @(Get-UnknownExtraCaps $p)
     if ($unkCaps.Count -gt 0) {

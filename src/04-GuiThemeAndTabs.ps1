@@ -332,6 +332,9 @@ function Add-NavButton([string]$label, $tab, $parentPanel, [int]$w = 0) {
 [void](Add-NavButton 'Network & capabilities' $tabNet $script:NavBar)
 [void](Add-NavButton 'Env & quotas' $tabEnv $script:NavBar)
 [void](Add-NavButton 'Notes' $tabNotes $script:NavBar)
+$bDesk = Ctl Button @{ Name = 'KeepStyle'; Text = 'Desktops...'; Height = 28; FlatStyle = 'Flat'; UseMnemonic = $false; Font = $script:FontBold; BackColor = $script:Theme.Surface2; ForeColor = $script:Theme.Text; Margin = (New-Object Windows.Forms.Padding(12, 1, 4, 1)); Width = ([Windows.Forms.TextRenderer]::MeasureText('Desktops...', $script:FontBold).Width + 24); Cursor = [Windows.Forms.Cursors]::Hand } $script:NavBar
+$bDesk.FlatAppearance.BorderSize = 1; $bDesk.FlatAppearance.BorderColor = $script:Theme.Border; $bDesk.FlatAppearance.MouseOverBackColor = $script:Theme.AccentHov
+$bDesk.add_Click({ Safe { Show-DesktopManagerDialog } })
 $script:BtnNavPreset = Add-NavButton 'Preset (*n)' $tabPreset $script:PresetBar 130
 $script:BtnNavPreset.Location = (Pt 6 2)
 $script:BtnNavPreset.Height = 26
@@ -684,7 +687,7 @@ $hardItems = @(
     @('Hard.KillOnClose', 'Kill the whole sandboxed process tree when the launcher exits (job object)'),
     @('Hard.WaitTree', 'Wait for the entire job process tree (IOCP) instead of exiting when a stub/launcher PID exits'),
     @('Hard.NoClipboard', 'Block clipboard read/write (job UI limit; disabling lets sandboxed apps read/write host clipboard)'),
-    @('Hard.NoDesktopSys', 'Block display changes, logoff/shutdown, desktop Create/Switch, global atoms & foreign HWNDs (still shares WinSta0\Default screen/audio)'),
+    @('Hard.NoDesktopSys', 'Block display changes, logoff/shutdown, desktop Create/Switch, global atoms & foreign HWNDs (pair with IsolateDesktop in Env & quotas for separate desktop)'),
     @('Hard.FollowReparse', 'UNSAFE: Allow Apply to traverse/grant across NTFS junctions & symbolic links (leave OFF to block reparse attacks)'),
     @('Hard.DepSehop32', 'DEP + SEHOP exploit mitigations for 32-bit executables (automatically skipped for 64-bit EXEs)'),
     @('Hard.HeapTerminate', 'Terminate process immediately on heap corruption'),
@@ -722,11 +725,16 @@ $script:Chk['Hard.RedirectProfile'].Height = 24
 $script:T.EnvAllow = Ctl TextBox @{ Location = (Pt 15 98); Size = (Sz 760 24) } $tabEnv
 [void](Ctl Label @{ Text = 'Custom env overrides (one KEY=VALUE per line; always applied last):'; Location = (Pt 15 130); AutoSize = $true } $tabEnv)
 $script:T.EnvCustom = Ctl TextBox @{ Location = (Pt 15 152); Size = (Sz 760 84); Multiline = $true; ScrollBars = 'Vertical'; AcceptsReturn = $true } $tabEnv
-[void](Ctl Label @{ Text = 'Custom WindowStation\Desktop (advanced, blank = WinSta0\Default; must be pre-created & ACLed for SID / S-1-15-2-2 or init fails):'; Location = (Pt 15 244); AutoSize = $true } $tabEnv)
-$script:T.Desktop = Ctl TextBox @{ Location = (Pt 15 266); Size = (Sz 440 24) } $tabEnv
+Add-Check $tabEnv 'Hard.IsolateDesktop' 'Automatically create & isolate a separate desktop unique to this Container ID (WinSta0\acm.desk.<ContainerId>)' 15 244 760
+$script:Chk['Hard.IsolateDesktop'].Height = 24
+Add-Check $tabEnv 'Hard.JoinFirstDesktop' 'Join the first running app''s isolated desktop (shares that acm.desk.* instead of creating a new desktop per app)' 35 270 740
+$script:Chk['Hard.JoinFirstDesktop'].Height = 24
+[void](Ctl Label @{ Text = 'Active / custom WindowStation\Desktop (auto-assigned when ticked above; blank = WinSta0\Default when unticked):'; Location = (Pt 15 302); AutoSize = $true } $tabEnv)
+$script:T.Desktop = Ctl TextBox @{ Location = (Pt 15 324); Size = (Sz 595 24) } $tabEnv
+[void](Btn 'Manage Desktops...' 618 322 157 $tabEnv { Safe { Show-DesktopManagerDialog } })
 
 # Numeric bounds (MaxProcesses 0 to 10000, Mem 0 to 1048576 MB, CpuRatePct 0 to 100) must match Assert-ValidProfileCommonFields
-$grpLim = Ctl GroupBox @{ Text = 'Job Object Resource Quotas (0 = unlimited; 32-bit PS clamps memory quotas at ~4 GB)'; Location = (Pt 15 304); Size = (Sz 760 184) } $tabEnv
+$grpLim = Ctl GroupBox @{ Text = 'Job Object Resource Quotas (0 = unlimited; 32-bit PS clamps memory quotas at ~4 GB)'; Location = (Pt 15 360); Size = (Sz 760 184) } $tabEnv
 [void](Ctl Label @{ Text = 'Max active processes:'; Location = (Pt 15 34); AutoSize = $true } $grpLim)
 $script:NumMaxProc = Ctl NumericUpDown @{ Location = (Pt 225 31); Size = (Sz 110 24); Minimum = 0; Maximum = 10000 } $grpLim
 [void](Ctl Label @{ Text = 'Per-process memory limit (MB):'; Location = (Pt 15 70); AutoSize = $true } $grpLim)
@@ -743,7 +751,7 @@ REQUIREMENTS & THREAT MODEL NOTES
 - OS floor: LPAC and DeriveCapabilitySidsFromName require Windows 10 version 1703 (build 15063) or newer. FSCTL disable requires Windows 11 build 25295+.
 - What AppContainer does NOT isolate:
   1) Kernel & GPU/driver surface (apps like Blender still reach GPU drivers; D3DSCache.dll shader cache issues in AC folders can cause slowdowns or 0xC0000135/ACCESS_DENIED if ACLs are misconfigured).
-  2) Shared WinSta0\Default screen & audio: JOB_OBJECT_UILIMIT_DESKTOP only blocks CreateDesktop/SwitchDesktop. Unless you use a separate desktop, sandboxed apps still share display capture (BitBlt/GetDC) and audio output.
+  2) Screen vs audio isolation: With IsolateDesktop ON (default), each container runs on WinSta0\acm.desk.<ContainerId> with a Low-IL protected DACL blocking WinSta0\Default & other containers from screen/GDI capture, hooks, and foreign HWNDs. Windows Audio (Audiosrv/WASAPI) is session-scoped; microphone input is gated by Dev.Mic + LPAC.
   3) Out-of-process COM/DCOM/ALPC: NoChild only blocks direct child processes; COM servers accessible to the container SID or S-1-15-2-1/lpacCom run outside the Job Object.
   4) DNS exfiltration via Dnscache: Windows Firewall -Package block rules do NOT block DNS lookups if ANY network capability is ticked. True offline requires 0 network capabilities (plus AutoOfflineBlock for child ALE_APP_ID rules).
   5) Public network profile LAN reachability: internetClient allows RFC1918 LAN access on Public profiles unless "Block private LAN" is enabled; internetClientServer still blocks unsolicited inbound traffic unless an inbound Allow rule is added.

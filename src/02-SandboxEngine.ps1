@@ -420,11 +420,21 @@ function Start-Sandboxed($p) {
             if ($parentOk) { $exeParent } else { Log "WorkDir fallback to container AC folder (parent of EXE has no allow rule): $base"; $base }
         }
         $mit = Get-Mitigation $h
+        $isoDesk = [bool]$h.IsolateDesktop
+        if ($isoDesk) {
+            if ($p.ExtraCaps -match '(?i)\bgraphicsCapture\b') { throw 'IsolateDesktop cannot be combined with graphicsCapture.' }
+            if ($p.Dev -and $p.Dev.Mic) { Log 'WARNING: IsolateDesktop isolates display capture, but Dev.Mic is ON (microphone input enabled).' }
+        }
         $o = New-Object ACM.LaunchOptions
         $o.Exe = $exe
         $o.CommandLine = ('"{0}" {1}' -f $exe, $p.Arguments).Trim()
         $o.WorkDir = $wd
-        $o.Desktop = if ($p.CustomDesktop) { $p.CustomDesktop.Trim() } else { '' }
+        $o.IsolateDesktop = $isoDesk
+        $o.AllowSharedDesktop = [bool]($isoDesk -and $h.JoinFirstDesktop)
+        $o.AllowMic = [bool]($p.Dev -and $p.Dev.Mic)
+        $o.Desktop = if ($isoDesk) {
+            if ($h.JoinFirstDesktop) { [ACM.Native]::FindFirstActiveIsolatedDesktop($cn) } else { Get-IsolatedDesktopPath $cn }
+        } elseif ($p.CustomDesktop) { $p.CustomDesktop.Trim() } else { '' }
         $o.ContainerName = $cn
         $o.CapabilitySids = $capSids
         $o.Env = [string[]]@(Get-EnvBlock $p $base $roaming $tmp)
@@ -446,6 +456,7 @@ function Start-Sandboxed($p) {
         if ($h.NoClipboard)  { $ui = $ui -bor 0x06 }
         # 0xF9 = HANDLES | SYSTEMPARAMETERS | DISPLAYSETTINGS | GLOBALATOMS | DESKTOP | EXITWINDOWS
         if ($h.NoDesktopSys) { $ui = $ui -bor 0xF9 }
+        if ($isoDesk)        { $ui = $ui -bor 0x61 }
         $o.JobUiFlags = $ui
         # Keep launcher alive when KillOnClose or Ephemeral needs the Job handle / finally cleanup
         $o.Wait = ($o.KillOnClose -or $eph)

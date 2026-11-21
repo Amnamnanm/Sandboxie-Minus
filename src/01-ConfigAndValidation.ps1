@@ -20,7 +20,7 @@ function New-ProfileObject([string]$Name) {
         Hard = [pscustomobject]@{ Lpac = $true; NoChild = $false; Win32k = $false; NoDynCode = $false; BlockNonMs = $false
             NoExtPoints = $true; StrictHandles = $true; ImgNoRemote = $true; ImgNoLowLabel = $true; ImgPreferSys32 = $false
             KillOnClose = $true; WaitTree = $true; Ephemeral = $false; FollowReparse = $false; RedirectProfile = $true
-            NoClipboard = $true; NoDesktopSys = $true; ShowConsole = $false; RegRead = $false
+            NoClipboard = $true; NoDesktopSys = $true; IsolateDesktop = $true; JoinFirstDesktop = $false; ShowConsole = $false; RegRead = $false
             DepSehop32 = $true; HeapTerminate = $true; BottomUpAslr = $true; HighEntropyAslr = $true; Cfg = $true
             ForceRelocate = $false; NoFonts = $false; NoFsctl = $false; StrictCfg = $false
             RestrictIbp = $false; Ssbd = $false; CetShadowStack = $false }
@@ -324,7 +324,7 @@ function Import-ValidatedStagingConfig([string]$stgPath, [string]$expectedUserSi
     foreach ($np in $incoming) {
         $k = $np.Name.ToLowerInvariant()
         if ($existingByName.ContainsKey($k)) { $np.Applied = $existingByName[$k].Applied }
-        else { $np.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Loopback = $false; Firewall = $false } }
+        else { $np.Applied = [pscustomobject]@{ Paths = @(); PathRules = @(); RegPaths = @(); Devices = @(); Loopback = $false; Firewall = $false } }
     }
     $script:Profiles = $incoming
     Save-Config
@@ -534,6 +534,8 @@ function Get-ContainerName($target) {
     'acm.' + ($n -replace '[^A-Za-z0-9._-]', '_')
 }
 # Firewall rule group name; must match Remove-Firewall (02) and Show-RuntimeInspector (05)
+function Get-IsolatedDesktopShortName([string]$cn) { 'acm.desk.' + (($cn -replace '[^A-Za-z0-9._-]', '_').Trim('._-') -replace '^$', 'app') }
+function Get-IsolatedDesktopPath([string]$cn) { 'WinSta0\' + (Get-IsolatedDesktopShortName $cn) }
 function Get-FirewallGroup($p) {
     if ($p.PSObject.Properties.Name -contains 'ContainerId' -and -not [string]::IsNullOrWhiteSpace($p.ContainerId)) {
         return "ACM-$($p.ContainerId)"
