@@ -2,7 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ExpectedSha256 = '18BA9E9F53E30E1A73CF68339F19539C5F721D1962A2D05618B893F2DB4CF881'
+$ExpectedSha256 = '6951802A031B700A8E714F4D4D04765992D993CC8E9F063407DCAB986F7849DB'
 
 # Self elevate
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
