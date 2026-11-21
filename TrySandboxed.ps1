@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  AppContainer Manager - create and launch Windows AppContainer sandbox profiles (no MSIX needed)
+  Sandboxie Minus - create and launch Windows AppContainer sandbox profiles (no MSIX needed)
   Requires Windows 10 1703 (build 15063)+ for LPAC and DeriveCapabilitySidsFromName.
   Run:
       powershell -STA -ExecutionPolicy Bypass -File .\TrySandboxed.ps1
