@@ -181,7 +181,7 @@ function New-StyledButton {
 
 # Build form
 $form = New-Object System.Windows.Forms.Form
-$form.Text            = 'TrySandboxed Setup'
+$form.Text            = 'Sandboxie Minus Setup'
 $form.ClientSize      = New-Object System.Drawing.Size(460, 248)
 $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
