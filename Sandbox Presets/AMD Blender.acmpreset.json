@@ -1,0 +1,175 @@
+{
+    "PresetVersion":  1,
+    "Type":  "AppContainerPreset",
+    "Name":  "Blender _version_",
+    "Description":  "",
+    "ExePath":  "*5\\blender.exe",
+    "Arguments":  "",
+    "WorkDir":  "",
+    "ExtraCaps":  "",
+    "Net":  {
+                "Client":  false,
+                "Server":  false,
+                "Private":  false,
+                "Loopback":  false,
+                "FwBlockAll":  true,
+                "FwBlockList":  "",
+                "AutoOfflineBlock":  true,
+                "BlockLanWhenClientOnly":  true,
+                "AllowCgnat":  false,
+                "AllowMulticast":  false,
+                "ServerAllowInbound":  false,
+                "ServerInboundPorts":  ""
+            },
+    "Hard":  {
+                 "Lpac":  true,
+                 "NoChild":  false,
+                 "Win32k":  false,
+                 "NoDynCode":  false,
+                 "BlockNonMs":  false,
+                 "NoExtPoints":  true,
+                 "StrictHandles":  true,
+                 "ImgNoRemote":  true,
+                 "ImgNoLowLabel":  true,
+                 "ImgPreferSys32":  false,
+                 "KillOnClose":  true,
+                 "WaitTree":  true,
+                 "Ephemeral":  false,
+                 "FollowReparse":  false,
+                 "RedirectProfile":  false,
+                 "NoClipboard":  true,
+                 "NoDesktopSys":  true,
+                 "IsolateDesktop":  true,
+                 "JoinFirstDesktop":  true,
+                 "ShowConsole":  true,
+                 "RegRead":  true,
+                 "DepSehop32":  true,
+                 "HeapTerminate":  true,
+                 "BottomUpAslr":  true,
+                 "HighEntropyAslr":  true,
+                 "Cfg":  true,
+                 "ForceRelocate":  false,
+                 "NoFonts":  false,
+                 "NoFsctl":  false,
+                 "StrictCfg":  false,
+                 "RestrictIbp":  false,
+                 "Ssbd":  false,
+                 "CetShadowStack":  false
+             },
+    "EnvMode":  "Allowlist",
+    "Dev":  {
+                "Mic":  false,
+                "Location":  false,
+                "Webcam":  false,
+                "UsbHidMode":  "Off",
+                "UsbHidDevices":  [
+
+                                  ]
+            },
+    "EnvAllow":  "",
+    "Limits":  {
+                   "MaxProcesses":  0,
+                   "ProcessMemMb":  0,
+                   "JobMemMb":  0,
+                   "CpuRatePct":  0
+               },
+    "DynamicVars":  [
+                        {
+                            "Token":  "*1",
+                            "Description":  "Your system drive (e.g., C:)"
+                        },
+                        {
+                            "Token":  "*2",
+                            "Description":  "Your username (Windows)"
+                        },
+                        {
+                            "Token":  "*3",
+                            "Description":  "Your work drive (e.g., D:)"
+                        },
+                        {
+                            "Token":  "*4",
+                            "Description":  "Path to folder containing Projects and TempFiles folders"
+                        },
+                        {
+                            "Token":  "*5",
+                            "Description":  "Path to folder containing blender.exe"
+                        }
+                    ],
+    "Rules":  [
+                  {
+                      "Path":  "*5",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Users\\*2\\AppData\\Roaming\\Blender Foundation",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadWrite",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*4\\TempFiles",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadWrite",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Windows",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Users\\*2\\AppData\\Local\\Blender Foundation",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadWrite",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*4\\Projects",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadWrite",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Users\\*2\\AppData\\Local\\AMD",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*3\\tmp",
+                      "Scope":  "Recursive",
+                      "Access":  "ReadWrite",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Users\\*2\\AppData\\Roaming",
+                      "Scope":  "FolderOnly",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\Users\\*2\\AppData\\Local",
+                      "Scope":  "FolderOnly",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*4",
+                      "Scope":  "FolderOnly",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  },
+                  {
+                      "Path":  "*1\\",
+                      "Scope":  "FolderOnly",
+                      "Access":  "ReadExecute",
+                      "Force":  false
+                  }
+              ],
+    "RegRules":  [
+
+                 ]
+}
