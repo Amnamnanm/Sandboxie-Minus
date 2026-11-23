@@ -636,23 +636,27 @@ function Test-SidHasExplicitAce([string]$path, [string]$sid) {
     } catch {}
     $false
 }
-function Get-ProtectedSubdirs([string]$root, [bool]$followReparse = $false) {
-    $res = New-Object System.Collections.Generic.List[string]
-    if (-not $followReparse -and (Test-IsReparsePoint $root)) { return $res }
-    $q = New-Object System.Collections.Generic.Queue[string]; $q.Enqueue($root)
-    while ($q.Count -gt 0) {
-        $cur = $q.Dequeue()
-        try {
-            foreach ($sub in [IO.Directory]::GetDirectories($cur)) {
-                try {
-                    if (-not $followReparse -and (Test-IsReparsePoint $sub)) { continue }
-                    if ((Get-Acl -LiteralPath $sub).AreAccessRulesProtected) { [void]$res.Add($sub) }
-                    $q.Enqueue($sub)
-                } catch {}
-            }
-        } catch {}
+function Test-AclCoversAccess($acl, [string]$sid, [string]$access) {
+    $need = switch ($access) {
+        'Full'        { [int][System.Security.AccessControl.FileSystemRights]::FullControl }
+        'ReadWrite'   { [int][System.Security.AccessControl.FileSystemRights]::Modify }
+        'ReadExecute' { [int][System.Security.AccessControl.FileSystemRights]::ReadAndExecute }
+        default       { [int][System.Security.AccessControl.FileSystemRights]::Read }
     }
-    $res
+    $expAllow = 0; $expDeny = 0; $inhAllow = 0; $inhDeny = 0
+    foreach ($ace in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+        if (($ace.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+        if ($ace.IdentityReference.Value -ine $sid) { continue }
+        $r = Convert-FsAccessMask ([int]$ace.FileSystemRights)
+        if (([int]$ace.FileSystemRights -band 0x40000000) -ne 0) { $r = $r -bor [int][System.Security.AccessControl.FileSystemRights]::Write }
+        if ($ace.AccessControlType -eq 'Deny') {
+            if ($ace.IsInherited) { $inhDeny = $inhDeny -bor $r } else { $expDeny = $expDeny -bor $r }
+        } elseif ($ace.AccessControlType -eq 'Allow') {
+            if ($ace.IsInherited) { $inhAllow = $inhAllow -bor $r } else { $expAllow = $expAllow -bor $r }
+        }
+    }
+    $granted = (($inhAllow -band (-bnot $inhDeny)) -bor $expAllow) -band (-bnot $expDeny)
+    (($granted -band $need) -eq $need)
 }
 function Test-ValidFwAddrSpec([string]$item) {
     if ($item -match '^(\d{1,3}\.){3}\d{1,3}(/\d{1,2}|-(\d{1,3}\.){3}\d{1,3})?$') {
@@ -733,7 +737,7 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
             $grpLabel = if ($p.Hard.Lpac) { 'ALL RESTRICTED APPLICATION PACKAGES (S-1-15-2-2)' } else { 'ALL APPLICATION PACKAGES (S-1-15-2-1)' }
             Log "${pfx}SKIP (already readable via $grpLabel; tick Force ACE if a subfolder dropped inheritance): $path"; continue
         }
-        if (($oldRules -contains $d.Key) -and (Test-SidHasExplicitAce $path $sid) -and -not ($oldToRevoke | Where-Object { $_.Path -ieq $path })) {
+        if (-not $d.Force -and ($oldRules -contains $d.Key) -and (Test-SidHasExplicitAce $path $sid) -and -not ($oldToRevoke | Where-Object { $_.Path -ieq $path })) {
             Log "${pfx}OK   (unchanged): $path"
             [void]$applied.Add($path); [void]$appliedRuleKeys.Add($d.Key)
             if ($sc -eq 'Recursive') { foreach ($subOld in @($p.Applied.Paths)) { if ($subOld -and ($subOld -ne $path) -and (Test-Under $subOld $path) -and -not ($oldToRevoke | Where-Object { $_.Path -ieq $subOld })) { [void]$applied.Add($subOld) } } }
@@ -746,15 +750,33 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
         if ($res.Code -eq 0) {
             Log "OK   [$sc/$acc]: $path"; [void]$applied.Add($path); [void]$appliedRuleKeys.Add($d.Key)
             if ($isDir -and $sc -eq 'Recursive' -and $path.TrimEnd('\').Length -gt 2 -and (-not (Test-SystemPath $path) -or $d.Force)) {
-                foreach ($ps in (Get-ProtectedSubdirs $path $followReparse)) {
-                    if ((Invoke-Icacls @($ps, '/grant:r', "*${sid}:$perm", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($ps) }
-                    else { $hadErrors = $true; Log "FAIL Protected subdir [$acc]: $ps" }
-                }
-                if ($p.ExePath) {
-                    $exePath = Resolve-RulePath $p.ExePath
-                    if ($exePath -and (Test-Under $exePath $path) -and (Test-Path -LiteralPath $exePath -PathType Leaf) -and ($followReparse -or -not (Test-IsReparsePoint $exePath))) {
-                        try { if ((Get-Acl -LiteralPath $exePath).AreAccessRulesProtected) { if ((Invoke-Icacls @($exePath, '/grant:r', "*${sid}:$rights", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($exePath) } } } catch {}
-                    }
+                $q = New-Object System.Collections.Generic.Queue[string]
+                $q.Enqueue($path)
+                while ($q.Count -gt 0) {
+                    $cur = $q.Dequeue()
+                    try {
+                        foreach ($sub in [IO.Directory]::GetDirectories($cur)) {
+                            try {
+                                if (-not $followReparse -and (Test-IsReparsePoint $sub)) { continue }
+                                $sAcl = Get-Acl -LiteralPath $sub
+                                if ($sAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $sAcl $sid $acc)) {
+                                    if ((Invoke-Icacls @($sub, '/grant:r', "*${sid}:$perm", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($sub) }
+                                    else { $hadErrors = $true; Log "FAIL Subdir [$acc]: $sub" }
+                                }
+                                $q.Enqueue($sub)
+                            } catch {}
+                        }
+                        foreach ($f in [IO.Directory]::GetFiles($cur)) {
+                            try {
+                                if (-not $followReparse -and (Test-IsReparsePoint $f)) { continue }
+                                $fAcl = Get-Acl -LiteralPath $f
+                                if ($fAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $fAcl $sid $acc)) {
+                                    if ((Invoke-Icacls @($f, '/grant:r', "*${sid}:$rights", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($f) }
+                                    else { $hadErrors = $true; Log "FAIL File [$acc]: $f" }
+                                }
+                            } catch {}
+                        }
+                    } catch {}
                 }
             }
         } else { $hadErrors = $true; Log "FAIL [$sc/$acc]: $path -> $($res.Out)" }
