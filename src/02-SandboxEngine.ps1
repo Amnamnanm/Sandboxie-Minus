@@ -669,6 +669,68 @@ function Test-ValidFwAddrSpec([string]$item) {
     }
     $false
 }
+function Invoke-FsBfs([string]$rootDir, [bool]$followReparse, [scriptblock]$onDir, [scriptblock]$onFile, [hashtable]$errState = $null) {
+    $q = New-Object System.Collections.Generic.Queue[string]
+    $q.Enqueue($rootDir)
+    while ($q.Count -gt 0) {
+        $cur = $q.Dequeue()
+        try {
+            foreach ($sub in [IO.Directory]::GetDirectories($cur)) {
+                try {
+                    if (-not $followReparse -and (Test-IsReparsePoint $sub)) { continue }
+                    & $onDir $sub
+                    $q.Enqueue($sub)
+                } catch {
+                    if ($errState) { $errState.HasError = $true }
+                    Log "WARN FS subdir ${sub}: $($_.Exception.Message)"
+                }
+            }
+            foreach ($f in [IO.Directory]::GetFiles($cur)) {
+                try {
+                    if (-not $followReparse -and (Test-IsReparsePoint $f)) { continue }
+                    & $onFile $f
+                } catch {
+                    if ($errState) { $errState.HasError = $true }
+                    Log "WARN FS file ${f}: $($_.Exception.Message)"
+                }
+            }
+        } catch {
+            if ($errState) { $errState.HasError = $true }
+            Log "WARN FS enum ${cur}: $($_.Exception.Message)"
+        }
+    }
+}
+function Revoke-FsSidPath([string]$path, [string]$sid, [bool]$tree, [bool]$followReparse = $false, [bool]$isDryRun = $false, [hashtable]$errState = $null, [bool]$logOk = $false) {
+    $pfx = if ($isDryRun) { '[DRY-RUN] ' } else { '' }
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $false }
+    if ((Test-SystemPath $path) -and -not (Test-SidHasExplicitAce $path $sid)) { Log "${pfx}SKIP revoke (no ACE on system path): $path"; return $false }
+    if (-not $followReparse -and -not (Test-PathNoReparse $path)) { Log "${pfx}SKIP revoke (reparse point): $path"; return $false }
+    if ($isDryRun) { Log "${pfx}Would remove ACEs for *$sid on $path (tree=$tree)"; return $false }
+    $r = Invoke-Icacls @($path, '/remove', "*$sid", '/C', '/Q', '/L')
+    if ($r.Code -ne 0) {
+        if ($errState) { $errState.HasError = $true }
+        Log "WARN Revoke Path $path (exit $($r.Code)): $($r.Out)"
+    } elseif ($logOk) { Log "Revoked Path: $path" }
+    if ($tree -and (Test-Path -LiteralPath $path -PathType Container)) {
+        $sidObj = New-Object System.Security.Principal.SecurityIdentifier($sid)
+        $rmChild = {
+            param($item)
+            foreach ($ace in (Get-Acl -LiteralPath $item).GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) {
+                if ($ace.IdentityReference.Value -ieq $sidObj.Value) {
+                    $rr = Invoke-Icacls @($item, '/remove', "*$sid", '/C', '/Q', '/L')
+                    if ($rr.Code -ne 0) {
+                        if ($errState) { $errState.HasError = $true }
+                        Log "WARN Revoke child ${item} (exit $($rr.Code)): $($rr.Out)"
+                    }
+                    break
+                }
+            }
+        }
+        Invoke-FsBfs $path $followReparse $rmChild $rmChild $errState
+        return $true
+    }
+    $false
+}
 function Invoke-Apply($p, [bool]$isDryRun = $false) {
     if (Test-ProfileHasDynamicPaths $p) { throw 'This profile contains unresolved dynamic preset placeholders (*n). Export as a preset and import it before applying ACLs.' }
     $sid = Get-Sid $p
@@ -693,10 +755,32 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
     foreach ($d in $desired) { [void]$desiredPaths.Add($d.Path) }
     if ($oldRules.Count -gt 0) {
         $keep = New-Object System.Collections.Generic.HashSet[string]([StringComparer]::OrdinalIgnoreCase)
-        foreach ($d in $desired) { if (($oldRules -contains $d.Key) -and (Test-SidHasExplicitAce $d.Path $sid)) { [void]$keep.Add($d.Path) } }
+        $keptRecRoots = New-Object System.Collections.Generic.List[string]
+        foreach ($d in $desired) {
+            if (($oldRules -contains $d.Key) -and (Test-SidHasExplicitAce $d.Path $sid)) {
+                [void]$keep.Add($d.Path)
+                if (-not $d.Force -and $d.Scope -eq 'Recursive') { [void]$keptRecRoots.Add($d.Path) }
+            }
+        }
+        $dirtyRuleRoots = New-Object System.Collections.Generic.List[string]
+        foreach ($rk in $oldRules) {
+            $parts = $rk -split '\|', 4
+            $rpOld = if ($parts.Count -ge 4 -and $parts[0] -in 'Allow', 'Deny') { $parts[1] } elseif ($parts.Count -ge 3) { $parts[0] } else { '' }
+            if ($rpOld -and -not $keep.Contains($rpOld)) { [void]$dirtyRuleRoots.Add($rpOld) }
+        }
         foreach ($old in @($p.Applied.Paths)) {
-            if ($old -and -not $keep.Contains($old)) {
-                # Don't /T tree-revoke a removed parent if an active child rule still sits under it
+            if (-not $old) { continue }
+            if (-not $keep.Contains($old)) {
+                $coveredByKept = $false
+                foreach ($kr in $keptRecRoots) {
+                    if ($old -ne $kr -and (Test-Under $old $kr)) {
+                        $underDirty = $false
+                        foreach ($dr in $dirtyRuleRoots) { if (Test-Under $old $dr) { $underDirty = $true; break } }
+                        if (-not $underDirty) { $coveredByKept = $true; break }
+                    }
+                }
+                if ($coveredByKept) { [void]$keep.Add($old); continue }
+                # Don't tree-revoke a removed parent if an active child rule still sits under it
                 $stillChild = $false
                 foreach ($dp in $desiredPaths) { if (Test-Under $dp $old) { $stillChild = $true; break } }
                 [void]$oldToRevoke.Add([pscustomobject]@{ Path = $old; Tree = ((-not $stillChild) -and (Test-NeedTreeRevoke $old $p)) })
@@ -710,14 +794,7 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
     foreach ($oldObj in $oldToRevoke) {
         $old = $oldObj.Path
         $step++; Set-TaskProgress $step $totalSteps "${pfx}Revoking stale ACL: $old"
-        if (Test-Path -LiteralPath $old) {
-            if ((Test-SystemPath $old) -and -not (Test-SidHasExplicitAce $old $sid)) { Log "${pfx}SKIP stale revoke (no ACE on system path): $old"; continue }
-            if (-not $followReparse -and (Test-IsReparsePoint $old)) { Log "${pfx}SKIP stale revoke (reparse point): $old"; continue }
-            if ($isDryRun) { Log "${pfx}Would remove ACEs for *$sid on $old (tree=$($oldObj.Tree))"; continue }
-            $icArgs = if ($oldObj.Tree) { @($old, '/remove', "*$sid", '/T', '/C', '/Q', '/L') } else { @($old, '/remove', "*$sid", '/C', '/Q', '/L') }
-            $rr = Invoke-Icacls $icArgs
-            if ($rr.Code -ne 0) { Log "WARN stale revoke ${old}: $($rr.Out)" }
-        }
+        [void](Revoke-FsSidPath $old $sid ([bool]$oldObj.Tree) $followReparse $isDryRun)
     }
     $applied = New-Object System.Collections.ArrayList
     $appliedRuleKeys = New-Object System.Collections.ArrayList
@@ -725,7 +802,7 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
         $step++; $path = $d.Path; $sc = $d.Scope; $acc = $d.Access
         Set-TaskProgress $step $totalSteps "${pfx}Applying [$sc/$acc]: $path"
         if (-not (Test-Path -LiteralPath $path)) { Log "${pfx}SKIP (does not exist): $path"; continue }
-        if (-not $followReparse -and (Test-IsReparsePoint $path)) {
+        if (-not $followReparse -and -not (Test-PathNoReparse $path)) {
             Log "${pfx}BLOCKED (reparse point / junction skipped for safety): $path"
             if (-not $isDryRun) { $hadErrors = $true }
             continue
@@ -750,34 +827,23 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
         if ($res.Code -eq 0) {
             Log "OK   [$sc/$acc]: $path"; [void]$applied.Add($path); [void]$appliedRuleKeys.Add($d.Key)
             if ($isDir -and $sc -eq 'Recursive' -and $path.TrimEnd('\').Length -gt 2 -and (-not (Test-SystemPath $path) -or $d.Force)) {
-                $q = New-Object System.Collections.Generic.Queue[string]
-                $q.Enqueue($path)
-                while ($q.Count -gt 0) {
-                    $cur = $q.Dequeue()
-                    try {
-                        foreach ($sub in [IO.Directory]::GetDirectories($cur)) {
-                            try {
-                                if (-not $followReparse -and (Test-IsReparsePoint $sub)) { continue }
-                                $sAcl = Get-Acl -LiteralPath $sub
-                                if ($sAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $sAcl $sid $acc)) {
-                                    if ((Invoke-Icacls @($sub, '/grant:r', "*${sid}:$perm", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($sub) }
-                                    else { $hadErrors = $true; Log "FAIL Subdir [$acc]: $sub" }
-                                }
-                                $q.Enqueue($sub)
-                            } catch {}
-                        }
-                        foreach ($f in [IO.Directory]::GetFiles($cur)) {
-                            try {
-                                if (-not $followReparse -and (Test-IsReparsePoint $f)) { continue }
-                                $fAcl = Get-Acl -LiteralPath $f
-                                if ($fAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $fAcl $sid $acc)) {
-                                    if ((Invoke-Icacls @($f, '/grant:r', "*${sid}:$rights", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($f) }
-                                    else { $hadErrors = $true; Log "FAIL File [$acc]: $f" }
-                                }
-                            } catch {}
-                        }
-                    } catch {}
-                }
+                $bfsErr = @{ HasError = $false }
+                Invoke-FsBfs $path $followReparse {
+                    param($sub)
+                    $sAcl = Get-Acl -LiteralPath $sub
+                    if ($sAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $sAcl $sid $acc)) {
+                        if ((Invoke-Icacls @($sub, '/grant:r', "*${sid}:$perm", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($sub) }
+                        else { $bfsErr.HasError = $true; Log "FAIL Subdir [$acc]: $sub" }
+                    }
+                } {
+                    param($f)
+                    $fAcl = Get-Acl -LiteralPath $f
+                    if ($fAcl.AreAccessRulesProtected -or -not (Test-AclCoversAccess $fAcl $sid $acc)) {
+                        if ((Invoke-Icacls @($f, '/grant:r', "*${sid}:$rights", '/C', '/Q', '/L')).Code -eq 0) { [void]$applied.Add($f) }
+                        else { $bfsErr.HasError = $true; Log "FAIL File [$acc]: $f" }
+                    }
+                } $bfsErr
+                if ($bfsErr.HasError) { $hadErrors = $true }
             }
         } else { $hadErrors = $true; Log "FAIL [$sc/$acc]: $path -> $($res.Out)" }
     }
@@ -852,7 +918,7 @@ function Invoke-Apply($p, [bool]$isDryRun = $false) {
                     [void]$lanRanges.Add($cidr)
                 }
                 if (-not $p.Net.AllowCgnat) { [void]$lanRanges.Add('100.64.0.0/10') }
-                if (-not $p.Net.AllowMulticast) { [void]$lanRanges.Add('224.0.0.0/4') }
+                if (-not $p.Net.AllowMulticast) { [void]$lanRanges.Add('224.0.0.0/4'); [void]$lanRanges.Add('ff00::/8') }
                 New-NetFirewallRule -DisplayName "ACM $($p.Name) block private LAN" -Group $grp -Direction Outbound -Action Block -Enabled True -Package $sid -RemoteAddress @($lanRanges) -ErrorAction Stop | Out-Null
                 foreach ($kw in @('LocalSubnet', 'DefaultGateway')) {
                     New-NetFirewallRule -DisplayName "ACM $($p.Name) block $kw" -Group $grp -Direction Outbound -Action Block -Enabled True -Package $sid -RemoteAddress $kw -ErrorAction Stop | Out-Null
@@ -985,17 +1051,18 @@ function Invoke-Revoke($p) {
     $paths = @($p.Applied.Paths); $regs = @($p.Applied.RegPaths)
     $tot = [Math]::Max(1, $paths.Count + $regs.Count + 1); $step = 0
     $hadErrors = $false
-    foreach ($old in $paths) {
+    $doneTrees = New-Object System.Collections.Generic.List[string]
+    $revErr = @{ HasError = $false }
+    foreach ($old in ($paths | Sort-Object { $_.Length })) {
         $step++; Set-TaskProgress $step $tot "Revoking path ACL: $old"
-        if ($old -and (Test-Path -LiteralPath $old)) {
-            if ((Test-SystemPath $old) -and -not (Test-SidHasExplicitAce $old $sid)) { Log "SKIP Revoke (no ACE on system path): $old"; continue }
-            if (Test-IsReparsePoint $old) { Log "SKIP Revoke (reparse point): $old"; continue }
-            $icArgs = if (Test-NeedTreeRevoke $old $p) { @($old, '/remove', "*$sid", '/T', '/C', '/Q', '/L') } else { @($old, '/remove', "*$sid", '/C', '/Q', '/L') }
-            $r = Invoke-Icacls $icArgs
-            if ($r.Code -ne 0) { $hadErrors = $true; Log "WARN Revoke Path $old (exit $($r.Code)): $($r.Out)" }
-            else { Log "Revoked Path: $old" }
-        }
+        if (-not $old) { continue }
+        $covered = $false
+        foreach ($dt in $doneTrees) { if (Test-Under $old $dt) { $covered = $true; break } }
+        if ($covered) { continue }
+        $needTree = Test-NeedTreeRevoke $old $p
+        if (Revoke-FsSidPath $old $sid $needTree $false $false $revErr $true) { [void]$doneTrees.Add($old) }
     }
+    if ($revErr.HasError) { $hadErrors = $true }
     foreach ($oldReg in $regs) {
         $step++; Set-TaskProgress $step $tot "Revoking registry ACL: $oldReg"
         if ($oldReg) {

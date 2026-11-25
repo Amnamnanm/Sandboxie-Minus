@@ -426,8 +426,16 @@ function Assert-ValidRegistryRulePath([string]$raw) {
 # where granting write access enables sandbox escape
 # area for improvement
 # TO DO: research and expand the rulesets
-function Test-RegDanger([string]$rp) {
-    $rp -match '(?i)\\(CurrentVersion\\Run(Once|Services|ServicesOnce)?|Image File Execution Options|SilentProcessExit|AeDebug|Command Processor|CurrentVersion\\Windows|AppCertDlls|Winlogon|Shell\\Open\\Command|User Shell Folders|Control Panel\\Desktop|Control\\Lsa|KnownDLLs|Software\\Classes|CLSID|AppID|InprocServer32|LocalServer32|Services|Session Manager\\Environment|Environment|Policies|AppContainer)(\\|$)'
+function Test-RegDanger([string]$rp, [string]$scope = 'Recursive') {
+    if ($rp -match '(?i)\\(CurrentVersion\\Run(Once(Ex)?|Services(Once)?)?|Image File Execution Options|SilentProcessExit|AeDebug|Command Processor|CurrentVersion\\Windows|AppCertDlls|Winlogon|Shell\\Open\\Command|(User )?Shell Folders|Control Panel\\Desktop|Control\\Lsa|KnownDLLs|Software\\Classes|CLSID|AppID|InprocServer32|LocalServer32|Services|Session Manager\\Environment|Environment|Policies|AppContainer)(\\|$)') { return $true }
+    if ($rp -match '(?i)^HKCR(\\|$)' -or $rp -notmatch '\\') { return $true }
+    $sc = Resolve-RegScopeKey $scope
+    if ($sc -eq 'FolderOnly') { return $false }
+    $subRp = $rp -replace '(?i)^HKU\\[^\\]+', 'HKCU'
+    if ($sc -eq 'DirectContents') {
+        return ($subRp -match '(?i)^((HKCU|HKLM)\\Software(\\WOW6432Node)?(\\Microsoft(\\Windows\\CurrentVersion(\\Explorer)?|\\Windows NT\\CurrentVersion)?)?|HKCU\\Control Panel|HKLM\\SYSTEM\\CurrentControlSet(\\Control(\\Session Manager)?)?)$')
+    }
+    ($subRp -match '(?i)^((HKCU|HKLM)\\Software(\\WOW6432Node)?(\\Microsoft(\\Windows(\\CurrentVersion(\\Explorer)?)?|\\Windows NT(\\CurrentVersion)?)?)?|HKCU\\Control Panel|HKLM\\SYSTEM(\\CurrentControlSet(\\Control(\\Session Manager)?)?)?)$')
 }
 # Validates Win32 USB/HID device interface paths matching NativeInterop.cs:
 #   a5dcbf10-6530-11d2-901f-00c04fb951ed = GUID_DEVINTERFACE_USB_DEVICE
@@ -630,14 +638,14 @@ function ConvertFrom-PresetJson([string]$raw) {
     foreach ($rr in @($obj.RegRules)) {
         if ($rr -isnot [pscustomobject]) { throw 'Invalid registry rule in preset.' }
         $regP = Assert-ValidRegistryRulePath ([string]$rr.Path)
-        $rsc = if ($rr.PSObject.Properties.Name -contains 'Scope') { [string]$rr.Scope } else { 'Recursive' }
+        $rsc = Resolve-RegScopeKey $(if ($rr.PSObject.Properties.Name -contains 'Scope') { [string]$rr.Scope } else { 'Recursive' })
         $racc = if ($rr.Access -in 'Read', 'ReadWrite', 'Full') { [string]$rr.Access } else { throw "Invalid preset registry access '$($rr.Access)'." }
         # Hard-block writable access to high-risk registry keys when importing shared presets
         # Area for improvement
         # TO DO: research and expand the list
-        if ($racc -in 'ReadWrite', 'Full' -and (Test-RegDanger $regP)) { throw "Security error: preset attempts write access to high-risk registry key '$regP'." }
+        if ($racc -in 'ReadWrite', 'Full' -and (Test-RegDanger $regP $rsc)) { throw "Security error: preset attempts write access to high-risk registry key '$regP'." }
         $rv = if ($rr.PSObject.Properties.Name -contains 'View' -and $rr.View -in 'Both', '64', '32') { [string]$rr.View } else { 'Both' }
-        $cleanReg += [pscustomobject]@{ Path = $regP; Scope = (Resolve-RegScopeKey $rsc); Access = $racc; View = $rv }
+        $cleanReg += [pscustomobject]@{ Path = $regP; Scope = $rsc; Access = $racc; View = $rv }
     }
     $obj.RegRules = @($cleanReg)
     $allPaths = @($obj.ExePath, $obj.WorkDir) + @($obj.Rules | ForEach-Object { $_.Path })

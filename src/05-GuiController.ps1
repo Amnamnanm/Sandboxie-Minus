@@ -21,14 +21,82 @@ function Update-SelectedCardVisual {
     }
 }
 function Select-ContainerCard([int]$idx) {
-    # $script:Loading guards against saving half-cleared UI controls during Refresh-List
-    # Flush edits to the outgoing profile ($script:Cur) before loading the newly clicked card
+    # $script:Loading guards against half-cleared UI controls
+    # flush edits to the outgoing profile ($script:Cur) 
+    # before loading the newly clicked card
     if ($script:Loading -or $idx -lt 0 -or $idx -ge $script:Profiles.Count) { return }
     if ($script:Cur) { Save-UiToProfile }
     $script:SelectedCardIdx = $idx
     Update-SelectedCardVisual
     Select-Profile $script:Profiles[$idx]
 }
+$script:CardDrag = @{ Down = $false; Active = $false; Start = [Drawing.Point]::Empty; Idx = -1; Hit = $null; ZoneMs = 0 }
+function Get-CardDropIndex([Drawing.Point]$pt) {
+    $ctrls = $script:CardsFlow.Controls
+    $cnt = $ctrls.Count
+    if ($cnt -le 0 -or $script:Profiles.Count -eq 0) { return -1 }
+    if ($pt.Y -lt ($ctrls[0].Top - 8)) { return 0 }
+    $rowBest = -1; $rowBestDist = [int]::MaxValue
+    for ($i = 0; $i -lt $cnt; $i++) {
+        $b = $ctrls[$i].Bounds
+        if ($pt.X -ge ($b.Left - 8) -and $pt.X -le ($b.Right + 8) -and $pt.Y -ge ($b.Top - 8) -and $pt.Y -le ($b.Bottom + 8)) { return $i }
+        if ($pt.Y -ge ($b.Top - 8) -and $pt.Y -le ($b.Bottom + 8)) {
+            $d = [Math]::Abs($pt.X - ($b.Left + ($b.Width / 2)))
+            if ($d -lt $rowBestDist) { $rowBestDist = $d; $rowBest = $i }
+        }
+    }
+    if ($rowBest -ge 0) { return $rowBest }
+    $cnt - 1
+}
+function Move-ContainerCard([int]$from, [int]$to) {
+    if ($from -eq $to -or $from -lt 0 -or $to -lt 0 -or $from -ge $script:Profiles.Count -or $to -ge $script:Profiles.Count) { return }
+    $item = $script:Profiles[$from]
+    $script:Profiles.RemoveAt($from)
+    $script:Profiles.Insert($to, $item)
+    $script:CardsFlow.SuspendLayout()
+    try {
+        $ctrl = $script:CardsFlow.Controls[$from]
+        $script:CardsFlow.Controls.SetChildIndex($ctrl, $to)
+        for ($i = 0; $i -lt $script:CardsFlow.Controls.Count; $i++) {
+            $cc = $script:CardsFlow.Controls[$i]
+            $cc.Tag = $i
+            foreach ($ch in $cc.Controls) { $ch.Tag = $i }
+        }
+        if ($script:Cur) { $script:SelectedCardIdx = $script:Profiles.IndexOf($script:Cur) }
+    } finally { $script:CardsFlow.ResumeLayout($true) }
+    Update-SelectedCardVisual
+}
+$script:DragScrollTmr = New-Object Windows.Forms.Timer
+$script:DragScrollTmr.Interval = 30
+$script:DragScrollTmr.add_Tick({
+    $d = $script:CardDrag
+    if (-not $d.Active -or (([Windows.Forms.Control]::MouseButtons -band [Windows.Forms.MouseButtons]::Left) -eq 0)) {
+        $script:DragScrollTmr.Stop()
+        if ($d.Hit) { $d.Hit.Cursor = [Windows.Forms.Cursors]::Hand }
+        $d.Down = $false; $d.Active = $false; $d.ZoneMs = 0; $d.Hit = $null
+        return
+    }
+    $ch = $script:CardsFlow.ClientSize.Height
+    $maxY = [Math]::Max(0, $script:CardsFlow.DisplayRectangle.Height - $ch)
+    if ($maxY -le 0) { $d.ZoneMs = 0; return }
+    $pt = $script:CardsFlow.PointToClient([Windows.Forms.Cursor]::Position)
+    $zone = [Math]::Min(56, [Math]::Max(24, [int]($ch * 0.14)))
+    $dir = 0; $depth = 0.0
+    if ($pt.Y -lt $zone) { $dir = -1; $depth = [Math]::Min(1.0, ($zone - $pt.Y) / [double]$zone) }
+    elseif ($pt.Y -gt ($ch - $zone)) { $dir = 1; $depth = [Math]::Min(1.0, ($pt.Y - ($ch - $zone)) / [double]$zone) }
+    if ($dir -eq 0) { $d.ZoneMs = 0; return }
+    $d.ZoneMs = [Math]::Min(1000, $d.ZoneMs + $script:DragScrollTmr.Interval)
+    $ramp = $d.ZoneMs / 1000.0
+    $px = [Math]::Max(1, [int][Math]::Round(2 + (10.0 * ($depth * $depth) * (0.35 + 0.65 * $ramp))))
+    $curY = -$script:CardsFlow.AutoScrollPosition.Y
+    $newY = [Math]::Max(0, [Math]::Min($maxY, $curY + ($dir * $px)))
+    if ($newY -ne $curY) {
+        $script:CardsFlow.AutoScrollPosition = New-Object Drawing.Point((-$script:CardsFlow.AutoScrollPosition.X), $newY)
+        $ptNow = $script:CardsFlow.PointToClient([Windows.Forms.Cursor]::Position)
+        $ti = Get-CardDropIndex $ptNow
+        if ($ti -ge 0 -and $ti -ne $d.Idx) { Move-ContainerCard $d.Idx $ti; $d.Idx = $ti }
+    }
+})
 function Add-ContainerCard($p, [int]$idx) {
     $card = New-Object Windows.Forms.Panel
     # 'KeepStyle' tells Set-DarkTheme not to overwrite custom card colors
@@ -77,10 +145,45 @@ function Add-ContainerCard($p, [int]$idx) {
 
     $onPick = { param($s, $e) Select-ContainerCard ([int]$s.Tag) }
     $onOpen = { param($s, $e) Select-ContainerCard ([int]$s.Tag); Switch-NavTab $tabGen }
+    $onDown = {
+        param($s, $e)
+        if ($e.Button -ne 'Left' -or $script:Busy -or $script:Profiles.Count -le 1) { return }
+        $script:CardDrag.Down = $true; $script:CardDrag.Active = $false
+        $script:CardDrag.Start = [Windows.Forms.Cursor]::Position
+        $script:CardDrag.Idx = [int]$s.Tag; $script:CardDrag.Hit = $s; $script:CardDrag.ZoneMs = 0
+    }
+    $onMove = {
+        param($s, $e)
+        $d = $script:CardDrag
+        if (-not $d.Down) { return }
+        $cur = [Windows.Forms.Cursor]::Position
+        if (-not $d.Active) {
+            if ([Math]::Abs($cur.X - $d.Start.X) -lt 6 -and [Math]::Abs($cur.Y - $d.Start.Y) -lt 6) { return }
+            $d.Active = $true
+            Select-ContainerCard $d.Idx
+            $s.Cursor = [Windows.Forms.Cursors]::SizeAll
+            $script:DragScrollTmr.Start()
+        }
+        $ti = Get-CardDropIndex ($script:CardsFlow.PointToClient($cur))
+        if ($ti -ge 0 -and $ti -ne $d.Idx) { Move-ContainerCard $d.Idx $ti; $d.Idx = $ti }
+    }
+    $onUp = {
+        param($s, $e)
+        $d = $script:CardDrag
+        if ($e.Button -ne 'Left' -or -not $d.Down) { return }
+        $was = $d.Active
+        $script:DragScrollTmr.Stop()
+        if ($d.Hit) { $d.Hit.Cursor = [Windows.Forms.Cursors]::Hand }
+        $d.Down = $false; $d.Active = $false; $d.ZoneMs = 0; $d.Hit = $null
+        if ($was) { Log 'Reordered containers (press Save (admin) to persist).' }
+    }
     # winForms doesnt bubble child mouse clicks to parent Panels so bind every visible child.
     foreach ($hit in @($card, $pic, $lblN, $lblS)) {
         $hit.add_Click($onPick)
         $hit.add_DoubleClick($onOpen)
+        $hit.add_MouseDown($onDown)
+        $hit.add_MouseMove($onMove)
+        $hit.add_MouseUp($onUp)
     }
     $btnImg.add_Click({ param($s, $e) Safe { Pick-ContainerIcon ([int]$s.Tag) } })
     $btnImg.add_MouseUp({ param($s, $e) if ($e.Button -eq 'Right') { Safe { Reset-ContainerIcon ([int]$s.Tag) } } })
